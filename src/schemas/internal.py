@@ -3,6 +3,7 @@
 These are not part of the public API contract and may change without notice.
 """
 
+from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal, Self
 
@@ -60,6 +61,13 @@ class DocumentMetadata(BaseModel):
 
 class DocumentCreate(DocumentBase):
     content: Annotated[str, Field(min_length=1, max_length=100000)]
+    created_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Optional event timestamp for the document. If omitted, the database "
+            "uses the insertion time."
+        ),
+    )
     session_name: str | None = Field(
         default=None,
         description="The session from which the document was derived (NULL for global observations)",

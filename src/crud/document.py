@@ -469,33 +469,28 @@ async def create_documents(
                 or not settings.VECTOR_STORE.MIGRATED
             )
 
+            document_values = {
+                "workspace_name": workspace_name,
+                "observer": observer,
+                "observed": observed,
+                "content": doc.content,
+                "level": doc.level,
+                "times_derived": doc.times_derived,
+                "internal_metadata": metadata_dict,
+                "session_name": doc.session_name,
+                # Tree linkage column
+                "source_ids": doc.source_ids,
+            }
+            if doc.created_at is not None:
+                document_values["created_at"] = doc.created_at
+
             if store_embeddings_in_postgres and doc.embedding:
                 new_doc = models.Document(
-                    workspace_name=workspace_name,
-                    observer=observer,
-                    observed=observed,
-                    content=doc.content,
-                    level=doc.level,
-                    times_derived=doc.times_derived,
-                    internal_metadata=metadata_dict,
-                    session_name=doc.session_name,
+                    **document_values,
                     embedding=doc.embedding,
-                    # Tree linkage column
-                    source_ids=doc.source_ids,
                 )
             else:
-                new_doc = models.Document(
-                    workspace_name=workspace_name,
-                    observer=observer,
-                    observed=observed,
-                    content=doc.content,
-                    level=doc.level,
-                    times_derived=doc.times_derived,
-                    internal_metadata=metadata_dict,
-                    session_name=doc.session_name,
-                    # Tree linkage column
-                    source_ids=doc.source_ids,
-                )
+                new_doc = models.Document(**document_values)
 
             if doc.embedding:
                 new_doc.sync_state = "pending"

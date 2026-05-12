@@ -23,7 +23,12 @@ from src.telemetry.events import (
     emit,
 )
 from src.utils import summarizer
-from src.utils.formatting import format_new_turn_with_timestamp, utc_now_iso
+from src.utils.formatting import (
+    format_datetime_utc,
+    format_new_turn_with_timestamp,
+    parse_datetime_iso,
+    utc_now_iso,
+)
 from src.utils.representation import Representation
 from src.utils.types import get_current_iteration
 
@@ -311,6 +316,27 @@ class ObservationsCreatedResult:
     created_count: int
     created_levels: list[str]
     failed: list[ObservationFailure]
+
+
+def _effective_document_created_at(doc: models.Document) -> datetime:
+    """Return a document's source/event timestamp, falling back to insertion time."""
+    message_created_at = doc.internal_metadata.get("message_created_at")
+    if isinstance(message_created_at, str):
+        try:
+            return parse_datetime_iso(message_created_at)
+        except ValueError:
+            return doc.created_at
+    if isinstance(message_created_at, datetime):
+        return message_created_at
+    return doc.created_at
+
+
+def _safe_parse_observation_created_at(value: str) -> datetime | None:
+    try:
+        return parse_datetime_iso(value)
+    except ValueError:
+        logger.warning("Invalid observation created_at fallback timestamp: %s", value)
+        return None
 
 
 def _truncate_tool_output(output: str, max_chars: int | None = None) -> str:
@@ -823,6 +849,25 @@ async def create_observations(
             observed=observed,
         )
 
+    fallback_created_at = _safe_parse_observation_created_at(message_created_at)
+    source_created_at_by_id: dict[str, datetime] = {}
+    source_ids_to_fetch = sorted(
+        {
+            source_id
+            for obs in normalized_observations
+            if obs.level in ("deductive", "inductive", "contradiction")
+            for source_id in (obs.source_ids or [])
+        }
+    )
+    if source_ids_to_fetch:
+        async with tracked_db("create_observations.source_timestamps") as db:
+            source_docs = await crud.get_documents_by_ids(
+                db, workspace_name, source_ids_to_fetch
+            )
+            source_created_at_by_id = {
+                doc.id: _effective_document_created_at(doc) for doc in source_docs
+            }
+
     # Phase 2: Compute embeddings (no DB needed)
     contents = [obs.content for obs in normalized_observations]
     embeddings_by_index: dict[int, list[float]] | None = None
@@ -861,10 +906,27 @@ async def create_observations(
                 )
                 continue
 
+        source_created_ats = [
+            source_created_at_by_id[source_id]
+            for source_id in (obs.source_ids or [])
+            if source_id in source_created_at_by_id
+        ]
+        created_at = (
+            max(source_created_ats)
+            if source_created_ats
+            and obs.level in ("deductive", "inductive", "contradiction")
+            else fallback_created_at
+        )
+        effective_message_created_at = (
+            format_datetime_utc(created_at)
+            if created_at is not None
+            else message_created_at
+        )
+
         # Build metadata with level-specific fields
         metadata = schemas.DocumentMetadata(
             message_ids=message_ids,
-            message_created_at=message_created_at,
+            message_created_at=effective_message_created_at,
             source_ids=obs.source_ids
             if obs.level in ("deductive", "inductive", "contradiction")
             else None,
@@ -880,6 +942,7 @@ async def create_observations(
 
         doc = schemas.DocumentCreate(
             content=obs.content,
+            created_at=created_at,
             session_name=session_name,
             level=obs.level,
             metadata=metadata,
@@ -1256,7 +1319,7 @@ async def _handle_create_observations_impl(
     # Determine message context
     if ctx.current_messages:
         message_ids = [msg.id for msg in ctx.current_messages]
-        message_created_at = str(ctx.current_messages[-1].created_at)
+        message_created_at = str(max(msg.created_at for msg in ctx.current_messages))
     else:
         message_ids = []
         message_created_at = utc_now_iso()

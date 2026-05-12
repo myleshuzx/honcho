@@ -244,6 +244,75 @@ class TestCreateObservations:
         assert doc.level == "deductive"
         assert doc.source_ids == ["premise1", "premise2"]
 
+    async def test_deductive_created_at_uses_latest_source_timestamp(
+        self,
+        db_session: AsyncSession,
+        tool_test_data: Any,
+        make_tool_context: Callable[..., ToolContext],
+    ):
+        """Derived observations inherit the latest effective source timestamp."""
+        workspace, peer1, peer2, session, _messages, _ = tool_test_data
+        older_event = datetime(2001, 1, 1, 12, 0, tzinfo=timezone.utc)
+        newer_event = datetime(2003, 3, 3, 12, 0, tzinfo=timezone.utc)
+        insertion_time = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+        source_old = models.Document(
+            workspace_name=workspace.name,
+            observer=peer1.name,
+            observed=peer2.name,
+            content="Historical source old",
+            session_name=session.name,
+            level="explicit",
+            created_at=insertion_time,
+            internal_metadata={
+                "message_ids": [1],
+                "message_created_at": older_event.isoformat(),
+            },
+        )
+        source_new = models.Document(
+            workspace_name=workspace.name,
+            observer=peer1.name,
+            observed=peer2.name,
+            content="Historical source new",
+            session_name=session.name,
+            level="explicit",
+            created_at=insertion_time,
+            internal_metadata={
+                "message_ids": [2],
+                "message_created_at": newer_event.isoformat(),
+            },
+        )
+        db_session.add_all([source_old, source_new])
+        await db_session.flush()
+        source_ids = [source_old.id, source_new.id]
+        await db_session.commit()
+
+        ctx = make_tool_context(current_messages=None)
+        result = await _handle_create_observations(
+            ctx,
+            {
+                "observations": [
+                    {
+                        "content": "Historical deductive conclusion",
+                        "source_ids": source_ids,
+                        "premises": [
+                            "Historical source old",
+                            "Historical source new",
+                        ],
+                    },
+                ]
+            },
+        )
+
+        assert "Created 1 observations" in result
+        stmt = select(models.Document).where(
+            models.Document.content == "Historical deductive conclusion"
+        )
+        doc = (await db_session.execute(stmt)).scalar_one()
+        assert doc.level == "deductive"
+        assert doc.created_at == newer_event
+        assert doc.internal_metadata["message_created_at"] == "2003-03-03T12:00:00Z"
+
     async def test_empty_observations_list_returns_error(
         self, make_tool_context: Callable[..., ToolContext]
     ):

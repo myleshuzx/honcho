@@ -142,6 +142,45 @@ class TestDocumentCRUD:
         assert len(results) == 2
 
     @pytest.mark.asyncio
+    async def test_create_documents_uses_custom_created_at(
+        self,
+        db_session: AsyncSession,
+        sample_data: tuple[models.Workspace, models.Peer],
+    ):
+        """DocumentCreate.created_at overrides the database insertion timestamp."""
+        test_workspace, test_peer = sample_data
+        test_peer2, test_session, _ = await self._setup_test_data(
+            db_session, test_workspace, test_peer
+        )
+        created_at = datetime.datetime(2004, 5, 6, 7, 8, tzinfo=datetime.timezone.utc)
+
+        await crud.create_documents(
+            db_session,
+            [
+                schemas.DocumentCreate(
+                    content="Historical observation",
+                    created_at=created_at,
+                    embedding=[0.2] * 1536,
+                    session_name=test_session.name,
+                    metadata=schemas.DocumentMetadata(
+                        message_ids=[1],
+                        message_created_at="2004-05-06T07:08:00Z",
+                    ),
+                )
+            ],
+            workspace_name=test_workspace.name,
+            observer=test_peer.name,
+            observed=test_peer2.name,
+        )
+
+        stmt = select(models.Document).where(
+            models.Document.workspace_name == test_workspace.name,
+            models.Document.content == "Historical observation",
+        )
+        doc = (await db_session.execute(stmt)).scalar_one()
+        assert doc.created_at == created_at
+
+    @pytest.mark.asyncio
     async def test_query_documents_excludes_soft_deleted(
         self,
         db_session: AsyncSession,

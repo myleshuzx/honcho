@@ -174,6 +174,7 @@ class RepresentationManager:
             documents_to_create.append(
                 schemas.DocumentCreate(
                     content=obs_content,
+                    created_at=message_created_at,
                     session_name=session_name,
                     level=obs_level,
                     metadata=metadata,
