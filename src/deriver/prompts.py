@@ -27,28 +27,33 @@ def minimal_deriver_prompt(
     """
     return c(
         f"""
-Analyze messages from {peer_id} to extract **explicit atomic facts** about them.
+分析来自 {peer_id} 的消息，提取关于他们的**显式原子事实**。
 
-[EXPLICIT] DEFINITION: Facts about {peer_id} that can be derived directly from their messages.
-   - Transform statements into one or multiple conclusions
-   - Each conclusion must be self-contained with enough context
-   - Use absolute dates/times when possible (e.g. "June 26, 2025" not "yesterday")
+[EXPLICIT] 定义：可以直接从 {peer_id} 的消息中得出的、关于 {peer_id} 的事实。
+   - 将陈述转换成一个或多个结论
+   - 每个结论都必须自成一体，并包含足够的上下文
+   - 尽可能使用绝对日期/时间（例如用"2025 年 6 月 26 日"，不要用"昨天"）
 
-RULES:
-- Properly attribute observations to the correct subject: if it is about {peer_id}, say so. If {peer_id} is referencing someone or something else, make that clear.
-- Observations should make sense on their own. Each observation will be used in the future to better understand {peer_id}.
-- Extract ALL observations from {peer_id} messages, using others as context.
-- Contextualize each observation sufficiently (e.g. "Ann is nervous about the job interview at the pharmacy" not just "Ann is nervous")
+规则：
+- 将观察正确归属到对应主体：如果内容是关于 {peer_id} 的，就明确说明；如果 {peer_id} 引用的是其他人或其他事物，也要说清楚。
+- 观察应当脱离原始上下文也能成立。每条观察都将用于未来更好地理解 {peer_id}。
+- 提取 {peer_id} 消息中的全部观察，并把其他人的消息作为上下文使用。
+- 为每条观察补充足够语境（例如写"Ann 对药店工作面试感到紧张"，不要只写"Ann 很紧张"）
 
-EXAMPLES:
-- EXPLICIT: "I just had my 25th birthday last Saturday" → "{peer_id} is 25 years old", "{peer_id}'s birthday is June 21st"
-- EXPLICIT: "I took my dog for a walk in NYC" → "{peer_id} has a dog", "{peer_id} lives in NYC"
-- EXPLICIT: "{peer_id} attended college" + general knowledge → "{peer_id} completed high school or equivalent"
+示例：
+- EXPLICIT："我刚在上周六过完 25 岁生日" -> "{peer_id} 25 岁"，"{peer_id} 的生日是 6 月 21 日"
+- EXPLICIT："我在纽约市遛了我的狗" -> "{peer_id} 有一只狗"，"{peer_id} 住在纽约市"
+- EXPLICIT："{peer_id} 上过大学" + 通识知识 -> "{peer_id} 已完成高中或同等学历"
 
-Messages to analyze:
+待分析的消息：
 <messages>
 {messages}
 </messages>
+
+请以 JSON 格式输出，包含以下字段：
+- explicit: 显式观察列表，每个观察必须是包含 content 字段的对象
+- deductive: 推论观察列表（暂不使用，留空数组）
+格式：{{"explicit": [{{"content": "观察内容"}}, {{"content": "另一个观察"}}], "deductive": []}}
 """
     )
 

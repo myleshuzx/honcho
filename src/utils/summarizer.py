@@ -102,18 +102,18 @@ def short_summary_prompt(
 ) -> str:
     """Generate the short summary prompt."""
     return c(f"""
-You are a system that summarizes parts of a conversation to create a concise and accurate summary. Focus on capturing:
+你是一个用于总结部分对话的系统，目标是生成简洁且准确的摘要。重点捕捉：
 
-1. Key facts and information shared (**Capture as many explicit facts as possible**)
-2. User preferences, opinions, and questions
-3. Important context and requests
-4. Core topics discussed
+1. 已分享的关键事实和信息（**尽可能捕捉更多显式事实**）
+2. 用户偏好、观点和问题
+3. 重要上下文和请求
+4. 讨论过的核心主题
 
-If there is a previous summary, ALWAYS make your new summary inclusive of both it and the new messages, therefore capturing the ENTIRE conversation. Prioritize key facts across the entire conversation.
+如果存在先前摘要，始终让你的新摘要同时涵盖先前摘要和新消息，从而捕捉整段对话。优先保留整段对话中的关键事实。
 
-Provide a concise, factual summary that captures the essence of the conversation. Your summary should be detailed enough to serve as context for future messages, but brief enough to be helpful. Prefer a thorough chronological narrative over a list of bullet points.
+提供一份简洁、事实性的摘要，抓住对话要点。摘要应足够详细，能够作为未来消息的上下文；同时也要足够简明，便于使用。优先采用完整的时间顺序叙述，而不是项目符号列表。
 
-Return only the summary without any explanation or meta-commentary.
+只返回摘要，不要附加任何解释或元评论。
 
 <previous_summary>
 {previous_summary_text}
@@ -123,7 +123,7 @@ Return only the summary without any explanation or meta-commentary.
 {formatted_messages}
 </conversation>
 
-Hard limit: {output_words} words maximum. If needed, drop lower-priority detail to stay within the limit.
+硬性上限：最多 {output_words} 个词。必要时，舍弃较低优先级的细节，以保持在限制以内。
 """)
 
 
@@ -134,20 +134,20 @@ def long_summary_prompt(
 ) -> str:
     """Generate the long summary prompt."""
     return c(f"""
-You are a system that creates thorough, comprehensive summaries of conversations. Focus on capturing:
+你是一个用于创建详尽、全面对话摘要的系统。重点捕捉：
 
-1. Key facts and information shared (**Capture as many explicit facts as possible**)
-2. User preferences, opinions, and questions
-3. Important context and requests
-4. Core topics discussed in detail
-5. User's apparent emotional state and personality traits
-6. Important themes and patterns across the conversation
+1. 已分享的关键事实和信息（**尽可能捕捉更多显式事实**）
+2. 用户偏好、观点和问题
+3. 重要上下文和请求
+4. 详细讨论过的核心主题
+5. 用户表现出的情绪状态和人格特质
+6. 贯穿对话的重要主题和模式
 
-If there is a previous summary, ALWAYS make your new summary inclusive of both it and the new messages, therefore capturing the ENTIRE conversation. Prioritize key facts across the entire conversation.
+如果存在先前摘要，始终让你的新摘要同时涵盖先前摘要和新消息，从而捕捉整段对话。优先保留整段对话中的关键事实。
 
-Provide a thorough and detailed summary that captures the essence of the conversation. Your summary should serve as a comprehensive record of the important information in this conversation. Prefer an exhaustive chronological narrative over a list of bullet points.
+提供一份详尽而细致的摘要，抓住对话要点。摘要应作为这段对话中重要信息的完整记录。优先采用穷尽式的时间顺序叙述，而不是项目符号列表。
 
-Return only the summary without any explanation or meta-commentary.
+只返回摘要，不要附加任何解释或元评论。
 
 <previous_summary>
 {previous_summary_text}
@@ -157,7 +157,7 @@ Return only the summary without any explanation or meta-commentary.
 {formatted_messages}
 </conversation>
 
-Hard limit: {output_words} words maximum. If needed, drop lower-priority detail to stay within the limit.
+硬性上限：最多 {output_words} 个词。必要时，舍弃较低优先级的细节，以保持在限制以内。
 """)
 
 
@@ -209,7 +209,7 @@ async def create_short_summary(
     if previous_summary:
         previous_summary_text = previous_summary
     else:
-        previous_summary_text = "There is no previous summary -- the messages are the beginning of the conversation."
+        previous_summary_text = "没有先前摘要；这些消息是对话的开头。"
 
     prompt = short_summary_prompt(
         formatted_messages, output_words, previous_summary_text
@@ -234,7 +234,7 @@ async def create_long_summary(
     if previous_summary:
         previous_summary_text = previous_summary
     else:
-        previous_summary_text = "There is no previous summary -- the messages are the beginning of the conversation."
+        previous_summary_text = "没有先前摘要；这些消息是对话的开头。"
 
     prompt = long_summary_prompt(
         formatted_messages, output_words, previous_summary_text

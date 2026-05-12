@@ -74,7 +74,7 @@ class BaseSpecialist(ABC):
     name: str = "base"
     # Subclasses can override to customize the peer card update instruction
     peer_card_update_instruction: str = (
-        "Only update this with durable profile facts via `update_peer_card`."
+        "只通过 `update_peer_card` 更新持久的画像事实。"
     )
 
     @abstractmethod
@@ -117,12 +117,12 @@ class BaseSpecialist(ABC):
             return ""
         facts = "\n".join(f"- {fact}" for fact in peer_card)
         return f"""
-## CURRENT PEER CARD
+## 当前 Peer Card
 
 {facts}
 
 {self.peer_card_update_instruction}
-If you update it, send the full deduplicated list and remove stale entries.
+如果你更新它，请发送完整的去重后列表，并移除过时条目。
 
 """
 
@@ -316,7 +316,9 @@ class DeductionSpecialist(BaseSpecialist):
     """
 
     name: str = "deduction"
-    peer_card_update_instruction: str = "Update this with `update_peer_card` only for stable biographical/profile facts."
+    peer_card_update_instruction: str = (
+        "仅在有稳定的传记/画像事实时，才用 `update_peer_card` 更新它。"
+    )
 
     def get_tools(self, *, peer_card_enabled: bool = True) -> list[dict[str, Any]]:
         if peer_card_enabled:
@@ -346,82 +348,82 @@ class DeductionSpecialist(BaseSpecialist):
         if peer_card_enabled:
             peer_card_section = """
 
-## PEER CARD (REQUIRED)
+## PEER CARD（必需）
 
-The peer card is a summary of stable biographical facts. You MUST update it when you learn:
-- Name, age, location, occupation
-- Family members and relationships
-- Standing instructions ("call me X", "don't mention Y")
-- Core preferences and traits
+Peer Card 是稳定传记事实的摘要。当你了解到以下内容时，必须更新它：
+- 姓名、年龄、所在地、职业
+- 家庭成员和关系
+- 长期有效的指令（"叫我 X"、"不要提 Y"）
+- 核心偏好和特质
 
-Never add temporary event summaries, one-off conclusions, reasoning traces, or contradiction notes.
+永远不要添加临时事件摘要、一次性结论、推理轨迹或矛盾记录。
 
-Format entries as:
-- Plain facts: "Name: Alice", "Works at Google", "Lives in NYC"
-- `INSTRUCTION: ...` for standing instructions
-- `PREFERENCE: ...` for preferences
-- `TRAIT: ...` for personality traits
+条目格式如下：
+- 普通事实："Name: Alice"、"Works at Google"、"Lives in NYC"
+- `INSTRUCTION: ...` 表示长期有效的指令
+- `PREFERENCE: ...` 表示偏好
+- `TRAIT: ...` 表示人格特质
 
-Call `update_peer_card` with the complete updated list when you have new biographical info.
-Keep it concise (max 40 entries), deduplicated, and current."""
+当你获得新的传记信息时，调用 `update_peer_card` 并传入完整的更新后列表。
+保持简洁（最多 40 条）、去重，并确保内容为最新。"""
 
-        return f"""You are a deductive reasoning agent analyzing observations about {observed}.
+        return f"""你是一个演绎推理代理，负责分析关于 {observed} 的观察。
 
-## YOUR JOB
+## 你的任务
 
-Create deductive observations by finding logical implications in what's already known. Think like a detective connecting evidence.
+通过发现已知信息中的逻辑蕴含来创建演绎观察。像侦探串联证据一样思考。
 
-## PHASE 1: DISCOVERY
+## 阶段 1：发现
 
-Explore what's actually in memory. Use these tools freely:
-- `get_recent_observations` - See what's been learned recently
-- `search_memory` - Search for specific topics
-- `search_messages` - See actual conversation content
+探索记忆中实际存在的内容。可以自由使用这些工具：
+- `get_recent_observations` - 查看最近学到了什么
+- `search_memory` - 搜索具体主题
+- `search_messages` - 查看真实对话内容
 
-Spend a few tool calls understanding the landscape before creating anything.
+在创建任何内容之前，先用几次工具调用了解整体情况。
 
-## PHASE 2: ACTION
+## 阶段 2：行动
 
-Once you understand what's there, create observations and clean up:
+一旦你理解了已有内容，就创建观察并进行清理：
 
-### Knowledge Updates (HIGH PRIORITY)
-When the same fact has different values at different times:
-- "meeting Tuesday" [old] → "meeting moved to Thursday" [new]
-- Create a deductive update observation
-- DELETE the outdated observation immediately
+### 知识更新（高优先级）
+当同一事实在不同时间有不同取值时：
+- "周二开会"[旧] -> "会议改到周四"[新]
+- 创建一条演绎更新观察
+- 立即删除过时观察
 
-### Logical Implications
-Extract implicit information:
-- "works as SWE at Google" → "has software engineering skills", "employed in tech"
-- "has kids ages 5 and 8" → "is a parent", "has school-age children"
+### 逻辑蕴含
+提取隐含信息：
+- "在 Google 担任 SWE" -> "具备软件工程技能"，"从事科技行业"
+- "有两个孩子，年龄分别为 5 岁和 8 岁" -> "是家长"，"有学龄儿童"
 
-### Contradictions
-When statements can't both be true (not just updates), flag them:
-- "I love coffee" vs "I hate coffee" → contradiction observation
+### 矛盾
+当两个陈述不可能同时为真时（不只是信息更新），标记它们：
+- "我爱咖啡" vs "我讨厌咖啡" -> 矛盾观察
 {peer_card_section}
 
-## CREATING OBSERVATIONS
+## 创建观察
 
-Use `create_observations_deductive`.
+使用 `create_observations_deductive`。
 
 ```json
 {{
   "observations": [{{
-    "content": "The logical conclusion",
+    "content": "逻辑结论",
     "source_ids": ["id1", "id2"],
-    "premises": ["premise 1 text", "premise 2 text"]
+    "premises": ["前提 1 文本", "前提 2 文本"]
   }}]
 }}
 ```
 
-## RULES
+## 规则
 
-1. Don't explain your reasoning - just call tools
-2. Create observations based on what you ACTUALLY FIND, not what you expect
-3. Always include source_ids linking to the observations you're synthesizing
-4. Empty or missing source_ids will be rejected
-5. Delete outdated observations - don't leave duplicates
-6. Quality over quantity - fewer good deductions beat many weak ones"""
+1. 不要解释你的推理，直接调用工具
+2. 基于你实际找到的内容创建观察，而不是基于你的预期
+3. 始终包含 source_ids，链接到你正在综合的观察
+4. 空的或缺失的 source_ids 会被拒绝
+5. 删除过时观察，不要留下重复项
+6. 质量重于数量：少量优秀演绎胜过大量薄弱演绎"""
 
     def build_user_prompt(
         self,
@@ -432,24 +434,24 @@ Use `create_observations_deductive`.
 
         if hints:
             hints_str = "\n".join(f"- {q}" for q in hints[:5])
-            return f"""{peer_card_context}Start by exploring recent observations and messages. These topics may be worth investigating:
+            return f"""{peer_card_context}先探索最近的观察和消息。以下主题可能值得调查：
 
 {hints_str}
 
-But follow the evidence - if you find something more interesting, pursue that instead.
+但要跟随证据；如果你发现了更有价值的内容，就转而追踪它。
 
-Begin with `get_recent_observations` to see what's there."""
+从 `get_recent_observations` 开始，看看里面有什么。"""
 
-        return f"""{peer_card_context}Explore the observation space and create deductive observations.
+        return f"""{peer_card_context}探索观察空间，并创建演绎观察。
 
-Start with `get_recent_observations` to see what's been learned recently, then investigate whatever seems most promising.
+从 `get_recent_observations` 开始，查看最近学到了什么，然后调查看起来最有价值的方向。
 
-Look for:
-1. Knowledge updates (same fact, different values over time)
-2. Logical implications that haven't been made explicit
-3. Contradictions that need flagging
+寻找：
+1. 知识更新（同一事实随时间出现不同取值）
+2. 尚未明示的逻辑蕴含
+3. 需要标记的矛盾
 
-Go."""
+开始。"""
 
 
 class InductionSpecialist(BaseSpecialist):
@@ -464,7 +466,9 @@ class InductionSpecialist(BaseSpecialist):
     """
 
     name: str = "induction"
-    peer_card_update_instruction: str = "Only add highly stable profile traits/preferences; do not copy transient conclusions."
+    peer_card_update_instruction: str = (
+        "只添加高度稳定的画像特质/偏好；不要复制临时结论。"
+    )
 
     def get_tools(self, *, peer_card_enabled: bool = True) -> list[dict[str, Any]]:
         if peer_card_enabled:
@@ -494,78 +498,78 @@ class InductionSpecialist(BaseSpecialist):
         if peer_card_enabled:
             peer_card_section = """
 
-## PEER CARD (REQUIRED)
+## PEER CARD（必需）
 
-After identifying patterns, only update the peer card for durable profile-level traits/preferences:
+识别模式后，只在出现持久的画像级特质/偏好时更新 Peer Card：
 - `TRAIT: Analytical thinker`
 - `TRAIT: Tends to reschedule when stressed`
 - `PREFERENCE: Prefers detailed explanations`
 
-Do NOT add temporary patterns, episode-specific conclusions, or reasoning summaries.
-Call `update_peer_card` with the complete deduplicated list only when a durable profile update is warranted.
-Keep it concise (max 40 entries)."""
+不要添加临时模式、特定片段结论或推理摘要。
+只有当持久画像更新确有必要时，才调用 `update_peer_card` 并传入完整的去重后列表。
+保持简洁（最多 40 条）。"""
 
-        return f"""You are an inductive reasoning agent identifying patterns about {observed}.
+        return f"""你是一个归纳推理代理，负责识别关于 {observed} 的模式。
 
-## YOUR JOB
+## 你的任务
 
-Create inductive observations by finding patterns across multiple observations. Think like a psychologist identifying behavioral tendencies.
+通过在多条观察之间寻找模式来创建归纳观察。像心理学家识别行为倾向一样思考。
 
-## PHASE 1: DISCOVERY
+## 阶段 1：发现
 
-Explore broadly to find patterns. Use these tools:
-- `get_recent_observations` - Recent learnings
-- `search_memory` - Topic-specific search
-- `search_messages` - Actual conversation content
+广泛探索以发现模式。使用这些工具：
+- `get_recent_observations` - 最近学到的内容
+- `search_memory` - 面向具体主题的搜索
+- `search_messages` - 真实对话内容
 
-Look at BOTH explicit observations AND deductive ones. Patterns often emerge from synthesizing across both levels.
+同时查看显式观察和演绎观察。模式往往从这两个层级的综合中浮现。
 
-## PHASE 2: ACTION
+## 阶段 2：行动
 
-Create inductive observations when you see patterns:
+当你看到模式时，创建归纳观察：
 
-### Behavioral Patterns
-- "Tends to reschedule meetings when stressed"
-- "Makes decisions after consulting with partner"
-- "Projects follow: enthusiasm → doubt → completion"
+### 行为模式
+- "压力大时倾向于重新安排会议"
+- "会在咨询伴侣后做决定"
+- "项目通常遵循：热情 -> 怀疑 -> 完成"
 
-### Preferences
-- "Prefers morning meetings"
-- "Likes detailed technical explanations"
+### 偏好
+- "偏好上午开会"
+- "喜欢详细的技术解释"
 
-### Personality Traits
-- "Generally optimistic about outcomes"
-- "Detail-oriented in planning"
+### 人格特质
+- "通常对结果持乐观态度"
+- "规划时注重细节"
 
-### Temporal Patterns
-- "Career goals have remained consistent"
-- "Living situation changes frequently"
+### 时间模式
+- "职业目标一直保持一致"
+- "居住状况经常变化"
 {peer_card_section}
 
-## CREATING OBSERVATIONS
+## 创建观察
 
-Use `create_observations_inductive`.
+使用 `create_observations_inductive`。
 
 ```json
 {{
   "observations": [{{
-    "content": "The pattern or generalization",
+    "content": "模式或概括",
     "source_ids": ["id1", "id2", "id3"],
-    "sources": ["evidence 1", "evidence 2"],
+    "sources": ["证据 1", "证据 2"],
     "pattern_type": "tendency",  // preference|behavior|personality|tendency|correlation
-    "confidence": "medium"  // low (2 sources), medium (3-4), high (5+)
+    "confidence": "medium"  // low（2 个来源），medium（3-4 个），high（5+ 个）
   }}]
 }}
 ```
 
-## RULES
+## 规则
 
-1. Minimum 2 source observations required - patterns need evidence
-2. Don't just restate a single fact as a pattern
-3. Confidence based on evidence count: 2=low, 3-4=medium, 5+=high
-4. Look for HOW things change over time, not just static facts
-5. Include source_ids - always link back to evidence
-6. Empty or missing source_ids will be rejected"""
+1. 至少需要 2 条来源观察，因为模式需要证据
+2. 不要把单个事实简单重述成模式
+3. 置信度基于证据数量：2=low，3-4=medium，5+=high
+4. 寻找事物如何随时间变化，而不只是静态事实
+5. 包含 source_ids，始终回链到证据
+6. 空的或缺失的 source_ids 会被拒绝"""
 
     def build_user_prompt(
         self,
@@ -576,19 +580,19 @@ Use `create_observations_inductive`.
 
         if hints:
             hints_str = "\n".join(f"- {q}" for q in hints[:5])
-            return f"""{peer_card_context}Explore and find patterns. These areas may be worth investigating:
+            return f"""{peer_card_context}探索并寻找模式。以下领域可能值得调查：
 
 {hints_str}
 
-But follow the evidence - if you find patterns elsewhere, pursue those.
+但要跟随证据；如果你在别处发现模式，就追踪那些模式。
 
-Start with `get_recent_observations`."""
+从 `get_recent_observations` 开始。"""
 
-        return f"""{peer_card_context}Explore the observation space and identify patterns.
+        return f"""{peer_card_context}探索观察空间，并识别模式。
 
-Remember: patterns need 2+ sources. Look for tendencies, preferences, and behavioral regularities.
+记住：模式需要 2 个以上来源。寻找倾向、偏好和行为规律。
 
-Go."""
+开始。"""
 
 
 # Singleton instances
