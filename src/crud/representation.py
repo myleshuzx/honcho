@@ -41,6 +41,37 @@ def _normalized_observation(
     return obs.model_copy(update={"content": text})
 
 
+def _created_at_for_observation(
+    obs: ExplicitObservation | DeductiveObservation,
+    *,
+    fallback_message_ids: list[int],
+    message_created_at: datetime.datetime,
+    message_created_at_by_id: dict[int, datetime.datetime] | None,
+) -> datetime.datetime:
+    """Return the latest source-message timestamp for a generated observation."""
+    if not message_created_at_by_id:
+        return message_created_at
+
+    candidate_ids = obs.message_ids or fallback_message_ids
+    candidate_times = [
+        message_created_at_by_id[message_id]
+        for message_id in candidate_ids
+        if message_id in message_created_at_by_id
+    ]
+    if candidate_times:
+        return max(candidate_times)
+
+    fallback_times = [
+        message_created_at_by_id[message_id]
+        for message_id in fallback_message_ids
+        if message_id in message_created_at_by_id
+    ]
+    if fallback_times:
+        return max(fallback_times)
+
+    return message_created_at
+
+
 class RepresentationManager:
     """Unified manager for representation and document queries."""
 
@@ -62,6 +93,7 @@ class RepresentationManager:
         session_name: str,
         message_created_at: datetime.datetime,
         message_level_configuration: ResolvedConfiguration,
+        message_created_at_by_id: dict[int, datetime.datetime] | None = None,
     ) -> int:
         """
         Save Representation objects to the collection as a set of documents.
@@ -71,6 +103,8 @@ class RepresentationManager:
             message_ids: Message ID range to link with observations
             session_name: Session name to link with existing summary context
             message_created_at: Timestamp when the message was created
+            message_created_at_by_id: Optional per-message timestamps for assigning
+                each generated document to its source message time.
 
         Returns:
             The number of *new documents saved*
@@ -122,6 +156,7 @@ class RepresentationManager:
                 session_name,
                 message_created_at,
                 message_level_configuration,
+                message_created_at_by_id,
             )
 
         create_document_duration = (time.perf_counter() - create_document_start) * 1000
@@ -143,6 +178,7 @@ class RepresentationManager:
         session_name: str,
         message_created_at: datetime.datetime,
         message_level_configuration: ResolvedConfiguration,
+        message_created_at_by_id: dict[int, datetime.datetime] | None = None,
     ) -> int:
         # get_or_create_collection already handles IntegrityError with rollback and a retry
         collection = await crud.get_or_create_collection(
@@ -165,16 +201,22 @@ class RepresentationManager:
                 obs_content = obs.content
                 obs_premises = None
 
+            observation_created_at = _created_at_for_observation(
+                obs,
+                fallback_message_ids=message_ids,
+                message_created_at=message_created_at,
+                message_created_at_by_id=message_created_at_by_id,
+            )
             metadata: schemas.DocumentMetadata = schemas.DocumentMetadata(
-                message_ids=message_ids,
+                message_ids=obs.message_ids or message_ids,
                 premises=obs_premises,
-                message_created_at=format_datetime_utc(message_created_at),
+                message_created_at=format_datetime_utc(observation_created_at),
             )
 
             documents_to_create.append(
                 schemas.DocumentCreate(
                     content=obs_content,
-                    created_at=message_created_at,
+                    created_at=observation_created_at,
                     session_name=session_name,
                     level=obs_level,
                     metadata=metadata,

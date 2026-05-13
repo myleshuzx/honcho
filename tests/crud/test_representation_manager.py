@@ -163,6 +163,54 @@ class TestRepresentationManagerSoftDelete:
 
 class TestRepresentationManagerSave:
     @pytest.mark.asyncio
+    async def test_save_representation_internal_uses_latest_source_message_time(self):
+        manager = RepresentationManager(
+            "workspace",
+            observer="observer",
+            observed="observed",
+        )
+        old_time = datetime(2024, 5, 1, 12, tzinfo=timezone.utc)
+        new_time = datetime(2024, 5, 3, 12, tzinfo=timezone.utc)
+        import_time = datetime(2026, 5, 11, 12, tzinfo=timezone.utc)
+        observations = [
+            ExplicitObservation(
+                content="derived from older diary entries",
+                created_at=import_time,
+                message_ids=[10, 11],
+                session_name="diary-import",
+            )
+        ]
+
+        with (
+            patch(
+                "src.crud.representation.crud.get_or_create_collection",
+                new=AsyncMock(return_value=SimpleNamespace(internal_metadata={})),
+            ),
+            patch(
+                "src.crud.representation.crud.create_documents",
+                new=AsyncMock(return_value=[]),
+            ) as mock_create_documents,
+        ):
+            await manager._save_representation_internal(
+                object(),  # pyright: ignore[reportArgumentType]
+                observations,
+                [[0.1]],
+                [10, 11],
+                "diary-import",
+                import_time,
+                SimpleNamespace(dream=SimpleNamespace(enabled=False)),  # pyright: ignore[reportArgumentType]
+                {10: old_time, 11: new_time},
+            )
+
+        created_docs = mock_create_documents.await_args.args[1]
+        assert len(created_docs) == 1
+        assert created_docs[0].created_at == new_time
+        assert created_docs[0].metadata.message_ids == [10, 11]
+        assert (
+            created_docs[0].metadata.message_created_at == "2024-05-03T12:00:00Z"
+        )
+
+    @pytest.mark.asyncio
     async def test_save_representation_filters_blank_observations_before_embedding(
         self,
     ):

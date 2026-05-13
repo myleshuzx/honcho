@@ -160,6 +160,9 @@ async def process_representation_tasks_batch(
         )
 
     message_ids = [m.id for m in messages if m.peer_name == observed]
+    message_created_at_by_id = {
+        m.id: m.created_at for m in messages if m.peer_name == observed
+    }
 
     # Convert to Representation and save
     observations = Representation.from_prompt_representation(
@@ -193,6 +196,7 @@ async def process_representation_tasks_batch(
                     latest_message.session_name,
                     latest_message.created_at,
                     message_level_configuration,
+                    message_created_at_by_id,
                 )
             except Exception as e:
                 logger.error(
