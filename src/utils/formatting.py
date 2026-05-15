@@ -5,9 +5,13 @@ This module contains helper functions for processing observations, formatting co
 handling temporal metadata, and string escaping for the reasoning system.
 """
 
+import re
 from datetime import datetime, timezone
 
 ILIKE_ESCAPE_CHAR = "\\"
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>\s*", re.IGNORECASE | re.DOTALL)
+_LEADING_UNCLOSED_THINK_RE = re.compile(r"^\s*<think\b[^>]*>.*", re.IGNORECASE | re.DOTALL)
+_LEADING_THINK_CLOSE_RE = re.compile(r"^\s*.*?</think>\s*", re.IGNORECASE | re.DOTALL)
 
 
 def escape_ilike_pattern(text: str) -> str:
@@ -40,6 +44,22 @@ def escape_ilike_pattern(text: str) -> str:
         .replace("%", ILIKE_ESCAPE_CHAR + "%")
         .replace("_", ILIKE_ESCAPE_CHAR + "_")
     )
+
+
+def strip_internal_reasoning(text: str) -> str:
+    """
+    Remove leaked reasoning markup from model-visible content before persistence.
+
+    Some OpenAI-compatible reasoning models return private chain-of-thought in
+    plain content wrapped in <think> tags. If the block is truncated and never
+    closes, the only safe persisted value is an empty string.
+    """
+    cleaned = _THINK_BLOCK_RE.sub("", text).strip()
+    if _LEADING_UNCLOSED_THINK_RE.match(cleaned):
+        return ""
+    if "</think>" in cleaned.lower():
+        cleaned = _LEADING_THINK_CLOSE_RE.sub("", cleaned).strip()
+    return cleaned
 
 
 def format_datetime_utc(dt: datetime) -> str:

@@ -126,6 +126,15 @@ class BaseSpecialist(ABC):
 
 """
 
+    def _output_safety_rules(self) -> str:
+        return """
+## 输出约束
+
+- 所有将被保存的 observation、premises、sources、Peer Card 条目必须使用简体中文。
+- 即使来源、工具结果或模型默认语言是英文，也必须翻译并改写为简体中文。
+- 禁止在任何工具参数或最终回复中写入 <think>、</think>、推理过程、分析草稿、内部计划或元评论。
+"""
+
     async def run(
         self,
         workspace_name: str,
@@ -368,6 +377,7 @@ Peer Card 是稳定传记事实的摘要。当你了解到以下内容时，必�
 保持简洁（最多 40 条）、去重，并确保内容为最新。"""
 
         return f"""你是一个演绎推理代理，负责分析关于 {observed} 的观察。
+{self._output_safety_rules()}
 
 ## 你的任务
 
@@ -510,6 +520,7 @@ class InductionSpecialist(BaseSpecialist):
 保持简洁（最多 40 条）。"""
 
         return f"""你是一个归纳推理代理，负责识别关于 {observed} 的模式。
+{self._output_safety_rules()}
 
 ## 你的任务
 

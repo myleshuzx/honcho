@@ -27,6 +27,7 @@ from src.utils.formatting import (
     format_datetime_utc,
     format_new_turn_with_timestamp,
     parse_datetime_iso,
+    strip_internal_reasoning,
     utc_now_iso,
 )
 from src.utils.representation import Representation
@@ -42,14 +43,30 @@ def _normalized_observation_input(
     obs: schemas.ObservationInput,
 ) -> schemas.ObservationInput:
     """Return an observation input with content normalized for persistence/embedding."""
-    return obs.model_copy(update={"content": obs.content.strip()})
+    premises = [
+        cleaned
+        for premise in (obs.premises or [])
+        if (cleaned := strip_internal_reasoning(premise).strip())
+    ]
+    sources = [
+        cleaned
+        for source in (obs.sources or [])
+        if (cleaned := strip_internal_reasoning(source).strip())
+    ]
+    return obs.model_copy(
+        update={
+            "content": strip_internal_reasoning(obs.content).strip(),
+            "premises": premises,
+            "sources": sources,
+        }
+    )
 
 
 def _base_observation_properties() -> dict[str, Any]:
     return {
         "content": {
             "type": "string",
-            "description": "The observation content",
+            "description": "The observation content. Write in Simplified Chinese. Do not include <think> tags, reasoning traces, drafts, plans, or meta commentary.",
         },
         "level": {
             "type": "string",
@@ -77,12 +94,12 @@ def _base_observation_properties() -> dict[str, Any]:
         "premises": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "(For deductive) Human-readable premise text for display",
+            "description": "(For deductive) Human-readable premise text for display. Write in Simplified Chinese and omit reasoning traces.",
         },
         "sources": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "(For inductive/contradiction) Human-readable source text for display",
+            "description": "(For inductive/contradiction) Human-readable source text for display. Write in Simplified Chinese and omit reasoning traces.",
         },
         "pattern_type": {
             "type": "string",
@@ -182,7 +199,7 @@ def _deductive_observation_item_schema() -> dict[str, Any]:
         "properties": {
             "content": {
                 "type": "string",
-                "description": "The deductive conclusion as a self-contained statement",
+                "description": "The deductive conclusion as a self-contained statement. Write in Simplified Chinese. Do not include <think> tags, reasoning traces, drafts, plans, or meta commentary.",
             },
             "source_ids": {
                 "type": "array",
@@ -194,7 +211,7 @@ def _deductive_observation_item_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 1,
-                "description": "Required human-readable premise text matching the source observations",
+                "description": "Required human-readable premise text matching the source observations. Write in Simplified Chinese and omit reasoning traces.",
             },
         },
         "required": ["content", "source_ids", "premises"],
@@ -208,7 +225,7 @@ def _inductive_observation_item_schema() -> dict[str, Any]:
         "properties": {
             "content": {
                 "type": "string",
-                "description": "The inductive pattern or generalization as a self-contained statement",
+                "description": "The inductive pattern or generalization as a self-contained statement. Write in Simplified Chinese. Do not include <think> tags, reasoning traces, drafts, plans, or meta commentary.",
             },
             "source_ids": {
                 "type": "array",
@@ -220,7 +237,7 @@ def _inductive_observation_item_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 2,
-                "description": "Required human-readable evidence text matching the source observations",
+                "description": "Required human-readable evidence text matching the source observations. Write in Simplified Chinese and omit reasoning traces.",
             },
             "pattern_type": {
                 "type": "string",
@@ -409,7 +426,7 @@ def _extract_pattern_snippet(
 TOOLS: dict[str, dict[str, Any]] = {
     "create_observations": {
         "name": "create_observations",
-        "description": "Create observations at any level: explicit (facts), deductive (logical necessities), inductive (patterns), or contradiction (conflicting statements). For deductive, inductive, and contradiction observations, missing or empty source_ids are invalid and will be rejected.",
+        "description": "Create observations at any level: explicit (facts), deductive (logical necessities), inductive (patterns), or contradiction (conflicting statements). Write all persistent text in Simplified Chinese and never include <think> tags, reasoning traces, drafts, plans, or meta commentary. For deductive, inductive, and contradiction observations, missing or empty source_ids are invalid and will be rejected.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -424,7 +441,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "create_observations_deductive": {
         "name": "create_observations_deductive",
-        "description": "Create new deductive observations discovered while answering the query. Every observation must include non-empty source_ids and premise text. Use this only for novel deductions grounded in existing observations.",
+        "description": "Create new deductive observations discovered while answering the query. Write all persistent text in Simplified Chinese and never include <think> tags, reasoning traces, drafts, plans, or meta commentary. Every observation must include non-empty source_ids and premise text. Use this only for novel deductions grounded in existing observations.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -439,7 +456,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "create_observations_inductive": {
         "name": "create_observations_inductive",
-        "description": "Create new inductive observations discovered while answering the query. Every observation must include source_ids, source text, pattern_type, and confidence. Use this only for patterns supported by multiple observations.",
+        "description": "Create new inductive observations discovered while answering the query. Write all persistent text in Simplified Chinese and never include <think> tags, reasoning traces, drafts, plans, or meta commentary. Every observation must include source_ids, source text, pattern_type, and confidence. Use this only for patterns supported by multiple observations.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -457,6 +474,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "description": (
             "Update the peer card with durable profile facts about the observed peer. "
             + "Only include stable biographical facts, standing instructions, and long-lived preferences/traits. "
+            + "Write entries in Simplified Chinese. Do not include <think> tags, reasoning traces, drafts, plans, or meta commentary. "
             + "Do not include one-off conclusions, temporary events, or duplicate entries."
         ),
         "input_schema": {
@@ -466,7 +484,7 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "type": "array",
                     "description": (
                         "Complete deduplicated peer card list (max 40 entries). "
-                        + "Each entry should be a concise standalone profile fact."
+                        + "Each entry should be a concise standalone profile fact in Simplified Chinese."
                     ),
                     "items": {"type": "string"},
                 },
@@ -1434,7 +1452,7 @@ async def _handle_update_peer_card(ctx: ToolContext, tool_input: dict[str, Any])
         else [str(raw_peer_card_content)]
     )
     for item in items:
-        line = str(item).strip()
+        line = strip_internal_reasoning(str(item)).strip()
         if not line:
             continue
 

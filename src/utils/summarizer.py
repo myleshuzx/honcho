@@ -25,7 +25,7 @@ from src.telemetry.prometheus.metrics import (
     DeriverTaskTypes,
     TokenTypes,
 )
-from src.utils.formatting import utc_now_iso
+from src.utils.formatting import strip_internal_reasoning, utc_now_iso
 from src.utils.tokens import estimate_tokens, track_deriver_input_tokens
 
 from .. import crud, models
@@ -115,6 +115,10 @@ def short_summary_prompt(
 
 只返回摘要，不要附加任何解释或元评论。
 
+输出语言：必须使用简体中文。即使先前摘要、对话内容或模型默认语言是英文，也必须翻译并改写为简体中文。
+
+禁止输出 <think>、</think>、推理过程、分析草稿、内部计划、XML 标签或任何元评论；只输出最终摘要正文。
+
 <previous_summary>
 {previous_summary_text}
 </previous_summary>
@@ -148,6 +152,10 @@ def long_summary_prompt(
 提供一份详尽而细致的摘要，抓住对话要点。摘要应作为这段对话中重要信息的完整记录。优先采用穷尽式的时间顺序叙述，而不是项目符号列表。
 
 只返回摘要，不要附加任何解释或元评论。
+
+输出语言：必须使用简体中文。即使先前摘要、对话内容或模型默认语言是英文，也必须翻译并改写为简体中文。
+
+禁止输出 <think>、</think>、推理过程、分析草稿、内部计划、XML 标签或任何元评论；只输出最终摘要正文。
 
 <previous_summary>
 {previous_summary_text}
@@ -206,10 +214,7 @@ async def create_short_summary(
     # LLMs *seem* to respond better to getting asked for a word count but should workshop this.
     output_words = int(min(input_tokens, settings.SUMMARY.MAX_TOKENS_SHORT) * 0.75)
 
-    if previous_summary:
-        previous_summary_text = previous_summary
-    else:
-        previous_summary_text = "没有先前摘要；这些消息是对话的开头。"
+    previous_summary_text = previous_summary or "没有先前摘要；这些消息是对话的开头。"
 
     prompt = short_summary_prompt(
         formatted_messages, output_words, previous_summary_text
@@ -231,10 +236,7 @@ async def create_long_summary(
     # LLMs *seem* to respond better to getting asked for a word count but should workshop this.
     output_words = int(settings.SUMMARY.MAX_TOKENS_LONG * 0.75)
 
-    if previous_summary:
-        previous_summary_text = previous_summary
-    else:
-        previous_summary_text = "没有先前摘要；这些消息是对话的开头。"
+    previous_summary_text = previous_summary or "没有先前摘要；这些消息是对话的开头。"
 
     prompt = long_summary_prompt(
         formatted_messages, output_words, previous_summary_text
@@ -561,7 +563,7 @@ async def _create_summary(
                 formatted_messages, previous_summary_text
             )
 
-        summary_text = response.content
+        summary_text = strip_internal_reasoning(response.content)
         summary_tokens = response.output_tokens
         llm_input_tokens = response.input_tokens
         llm_output_tokens = response.output_tokens

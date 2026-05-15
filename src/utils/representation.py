@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from src import models
-from src.utils.formatting import parse_datetime_iso
+from src.utils.formatting import parse_datetime_iso, strip_internal_reasoning
 
 
 def _strip_microseconds_and_timezone(timestamp: datetime) -> datetime:
@@ -663,16 +663,18 @@ class Representation(BaseModel):
         created_at: datetime,
     ) -> "Representation":
         """Convert PromptRepresentation to Representation."""
+        explicit = [
+            ExplicitObservation(
+                content=content,
+                created_at=created_at,
+                message_ids=message_ids,
+                session_name=session_name,
+            )
+            for e in prompt_representation.explicit
+            if (content := strip_internal_reasoning(e.content).strip())
+        ]
         return cls(
-            explicit=[
-                ExplicitObservation(
-                    content=e.content,
-                    created_at=created_at,
-                    message_ids=message_ids,
-                    session_name=session_name,
-                )
-                for e in prompt_representation.explicit
-            ],
+            explicit=explicit,
             deductive=[],
             inductive=[],
         )

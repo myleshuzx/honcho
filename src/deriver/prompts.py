@@ -39,6 +39,8 @@ def minimal_deriver_prompt(
 - 观察应当脱离原始上下文也能成立。每条观察都将用于未来更好地理解 {peer_id}。
 - 提取 {peer_id} 消息中的全部观察，并把其他人的消息作为上下文使用。
 - 为每条观察补充足够语境（例如写"Ann 对药店工作面试感到紧张"，不要只写"Ann 很紧张"）
+- 所有 observation.content 必须使用简体中文。即使原消息或示例是英文，也必须翻译并改写为简体中文。
+- 禁止在 observation.content 中包含 <think>、</think>、推理过程、分析草稿、内部计划或元评论。
 
 示例：
 - EXPLICIT："我刚在上周六过完 25 岁生日" -> "{peer_id} 25 岁"，"{peer_id} 的生日是 6 月 21 日"
