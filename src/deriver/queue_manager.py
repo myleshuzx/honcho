@@ -1,4 +1,5 @@
 import asyncio
+import re
 import signal
 from asyncio import Task
 from collections.abc import Sequence
@@ -47,6 +48,108 @@ from src.webhooks.events import (
 logger = getLogger(__name__)
 
 load_dotenv(override=True)
+
+TRANSIENT_RETRY_BASE_SECONDS = 60
+TRANSIENT_RETRY_MAX_SECONDS = 6 * 60 * 60
+TRANSIENT_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+TRANSIENT_ERROR_NAMES = (
+    "RateLimitError",
+    "APITimeoutError",
+    "APIConnectionError",
+    "APIError",
+    "InternalServerError",
+    "ServiceUnavailableError",
+    "TimeoutError",
+    "ConnectionError",
+)
+TRANSIENT_ERROR_PATTERNS = (
+    "rate limit",
+    "ratelimit",
+    "too many requests",
+    "temporarily unavailable",
+    "timeout",
+    "timed out",
+    "connection",
+    "server error",
+    "service unavailable",
+    "try again later",
+    "限流",
+    "频率限制",
+    "稍后",
+    "套餐",
+)
+
+
+def _iter_error_chain(error: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None:
+        chain.append(current)
+        current = (
+            current.__cause__ if isinstance(current.__cause__, BaseException) else None
+        )
+    return chain
+
+
+def _status_code_from_error(error: BaseException) -> int | None:
+    for exc in _iter_error_chain(error):
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+        response = getattr(exc, "response", None)
+        response_status_code = getattr(response, "status_code", None)
+        if isinstance(response_status_code, int):
+            return response_status_code
+    return None
+
+
+def _is_transient_processing_error(error: BaseException) -> bool:
+    status_code = _status_code_from_error(error)
+    if status_code in TRANSIENT_STATUS_CODES:
+        return True
+    if any(exc.__class__.__name__ in TRANSIENT_ERROR_NAMES for exc in _iter_error_chain(error)):
+        return True
+    error_text = str(error).lower()
+    return any(pattern in error_text for pattern in TRANSIENT_ERROR_PATTERNS)
+
+
+def _parse_retry_delay_seconds(error: BaseException) -> int | None:
+    error_text = str(error)
+    for exc in _iter_error_chain(error):
+        headers = getattr(exc, "headers", None)
+        retry_after = headers.get("retry-after") if hasattr(headers, "get") else None
+        if retry_after:
+            try:
+                return max(1, int(float(retry_after)))
+            except ValueError:
+                pass
+
+    patterns = (
+        (r"retry(?:\s|-)?after[:=\s]+(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b", 1),
+        (r"retry(?:\s|-)?after[:=\s]+(\d+(?:\.\d+)?)\s*(?:minutes?|mins?|m)\b", 60),
+        (r"retry(?:\s|-)?after[:=\s]+(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b", 3600),
+        (r"(\d+(?:\.\d+)?)\s*(?:seconds?|secs?)\b", 1),
+        (r"(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b", 60),
+        (r"(\d+(?:\.\d+)?)\s*(?:hours?|hrs?)\b", 3600),
+        (r"(\d+(?:\.\d+)?)\s*秒", 1),
+        (r"(\d+(?:\.\d+)?)\s*分钟", 60),
+        (r"(\d+(?:\.\d+)?)\s*小时", 3600),
+        (r"(\d+(?:\.\d+)?)\s*h\b", 3600),
+    )
+    for pattern, multiplier in patterns:
+        match = re.search(pattern, error_text, flags=re.IGNORECASE)
+        if match:
+            return max(1, int(float(match.group(1)) * multiplier))
+    return None
+
+
+def _retry_delay_seconds(error: BaseException, retry_count: int) -> int:
+    parsed_delay = _parse_retry_delay_seconds(error)
+    if parsed_delay is not None:
+        return min(parsed_delay, TRANSIENT_RETRY_MAX_SECONDS)
+    retry_index = max(retry_count, 1) - 1
+    delay = TRANSIENT_RETRY_BASE_SECONDS * (2**retry_index)
+    return min(delay, TRANSIENT_RETRY_MAX_SECONDS)
 
 
 class WorkerOwnership(NamedTuple):
@@ -270,6 +373,10 @@ class QueueManager:
 
         async with tracked_db("get_available_work_units") as db:
             representation_prefix = "representation:"
+            is_ready_for_attempt = or_(
+                models.QueueItem.next_attempt_at.is_(None),
+                models.QueueItem.next_attempt_at <= func.now(),
+            )
             token_stats_subq = (
                 select(
                     models.QueueItem.work_unit_key,
@@ -280,6 +387,7 @@ class QueueManager:
                     models.QueueItem.message_id == models.Message.id,
                 )
                 .where(~models.QueueItem.processed)
+                .where(is_ready_for_attempt)
                 .where(models.QueueItem.work_unit_key.startswith(representation_prefix))
                 .group_by(models.QueueItem.work_unit_key)
                 .subquery()
@@ -288,6 +396,7 @@ class QueueManager:
             work_units_subq = (
                 select(models.QueueItem.work_unit_key)
                 .where(~models.QueueItem.processed)
+                .where(is_ready_for_attempt)
                 .group_by(models.QueueItem.work_unit_key)
                 .subquery()
             )
@@ -416,11 +525,14 @@ class QueueManager:
         items: list[QueueItem],
         work_unit_key: str,
         context: str,
-    ) -> None:
+    ) -> bool:
         """
-        Handle processing errors by marking queue items as errored, logging, and forwarding to Sentry.
-        We only mark the first queue item as errored so we don't potentially throw away a batch. This allows us
-        to incrementally attempt to process the batch while still maintaining progress in a work unit.
+        Handle processing errors by recording retryable failures or marking
+        permanent failures as processed.
+
+        We only update the first queue item so we do not throw away a batch.
+        Retryable failures keep processed=false and set next_attempt_at so the
+        work unit can resume after backoff instead of being reported completed.
 
         Args:
             error: The exception that occurred
@@ -429,11 +541,15 @@ class QueueManager:
             context: Context string describing what was being processed (e.g., "processing representation batch")
         """
         error_msg = f"{error.__class__.__name__}: {str(error)}"
+        is_transient = _is_transient_processing_error(error)
         try:
             if items:
-                await self.mark_queue_item_as_errored(
-                    items[0], work_unit_key, error_msg
-                )
+                if is_transient:
+                    await self.mark_queue_item_for_retry(items[0], work_unit_key, error)
+                else:
+                    await self.mark_queue_item_as_errored(
+                        items[0], work_unit_key, error_msg
+                    )
         except Exception as mark_error:
             logger.error(
                 f"Failed to mark queue items as errored for work unit {work_unit_key}: {mark_error}",
@@ -446,6 +562,7 @@ class QueueManager:
         )
         if settings.SENTRY.ENABLED:
             sentry_sdk.capture_exception(error)
+        return is_transient
 
     async def process_work_unit(self, work_unit_key: str, worker_id: str) -> None:
         """Process all queue items for a specific work unit by routing to the correct handler."""
@@ -509,12 +626,14 @@ class QueueManager:
                                 )
                                 queue_item_count += len(items_to_process)
                             except Exception as e:
-                                await self._handle_processing_error(
+                                should_pause = await self._handle_processing_error(
                                     e,
                                     items_to_process,
                                     work_unit_key,
                                     f"processing {work_unit.task_type} batch",
                                 )
+                                if should_pause:
+                                    break
 
                         else:
                             queue_item = await self.get_next_queue_item(
@@ -533,12 +652,14 @@ class QueueManager:
                                 )
                                 queue_item_count += 1
                             except Exception as e:
-                                await self._handle_processing_error(
+                                should_pause = await self._handle_processing_error(
                                     e,
                                     [queue_item],
                                     work_unit_key,
                                     "processing queue item",
                                 )
+                                if should_pause:
+                                    break
 
                     except Exception as e:
                         logger.error(
@@ -618,6 +739,12 @@ class QueueManager:
                 )
                 .where(models.QueueItem.work_unit_key == work_unit_key)
                 .where(~models.QueueItem.processed)
+                .where(
+                    or_(
+                        models.QueueItem.next_attempt_at.is_(None),
+                        models.QueueItem.next_attempt_at <= func.now(),
+                    )
+                )
                 .where(*aqs_conditions)
                 .order_by(models.QueueItem.id)
                 .limit(1)
@@ -682,6 +809,12 @@ class QueueManager:
                     models.QueueItem.message_id == models.Message.id,
                 )
                 .where(~models.QueueItem.processed)
+                .where(
+                    or_(
+                        models.QueueItem.next_attempt_at.is_(None),
+                        models.QueueItem.next_attempt_at <= func.now(),
+                    )
+                )
                 .where(models.Message.session_name == parsed_key.session_name)
                 .where(models.Message.workspace_name == parsed_key.workspace_name)
                 .where(models.QueueItem.work_unit_key == work_unit_key)
@@ -746,6 +879,10 @@ class QueueManager:
                     and_(
                         models.QueueItem.work_unit_key == work_unit_key,
                         ~models.QueueItem.processed,
+                        or_(
+                            models.QueueItem.next_attempt_at.is_(None),
+                            models.QueueItem.next_attempt_at <= func.now(),
+                        ),
                         models.QueueItem.message_id == models.Message.id,
                     ),
                 )
@@ -794,7 +931,13 @@ class QueueManager:
                 update(models.QueueItem)
                 .where(models.QueueItem.id.in_(item_ids))
                 .where(models.QueueItem.work_unit_key == work_unit_key)
-                .values(processed=True)
+                .values(
+                    processed=True,
+                    error=None,
+                    last_error=None,
+                    retry_count=0,
+                    next_attempt_at=None,
+                )
             )
             await db.execute(
                 update(models.ActiveQueueSession)
@@ -817,7 +960,7 @@ class QueueManager:
     async def mark_queue_item_as_errored(
         self, item: QueueItem, work_unit_key: str, error: str
     ) -> None:
-        """Mark queue item as processed with an error"""
+        """Mark queue item as permanently processed with an error."""
         if not item:
             return
         async with tracked_db("mark_queue_item_as_errored") as db:
@@ -825,7 +968,12 @@ class QueueManager:
                 update(models.QueueItem)
                 .where(models.QueueItem.id == item.id)
                 .where(models.QueueItem.work_unit_key == work_unit_key)
-                .values(processed=True, error=error[:65535])  # Truncate to TEXT limit
+                .values(
+                    processed=True,
+                    error=error[:65535],
+                    last_error=error[:65535],
+                    next_attempt_at=None,
+                )
             )
             await db.execute(
                 update(models.ActiveQueueSession)
@@ -833,6 +981,44 @@ class QueueManager:
                 .values(last_updated=func.now())
             )
             await db.commit()
+
+    async def mark_queue_item_for_retry(
+        self, item: QueueItem, work_unit_key: str, error: Exception
+    ) -> None:
+        """Keep a transiently failed queue item pending with exponential backoff."""
+        if not item:
+            return
+
+        next_retry_count = int(item.retry_count or 0) + 1
+        delay_seconds = _retry_delay_seconds(error, next_retry_count)
+        next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+        error_msg = f"{error.__class__.__name__}: {str(error)}"[:65535]
+
+        async with tracked_db("mark_queue_item_for_retry") as db:
+            await db.execute(
+                update(models.QueueItem)
+                .where(models.QueueItem.id == item.id)
+                .where(models.QueueItem.work_unit_key == work_unit_key)
+                .values(
+                    processed=False,
+                    error=None,
+                    last_error=error_msg,
+                    retry_count=next_retry_count,
+                    next_attempt_at=next_attempt_at,
+                )
+            )
+            await db.execute(
+                update(models.ActiveQueueSession)
+                .where(models.ActiveQueueSession.work_unit_key == work_unit_key)
+                .values(last_updated=func.now())
+            )
+            await db.commit()
+        logger.warning(
+            "Retryable error for work unit %s; retry_count=%s next_attempt_at=%s",
+            work_unit_key,
+            next_retry_count,
+            next_attempt_at.isoformat(),
+        )
 
     async def _cleanup_work_unit(
         self,

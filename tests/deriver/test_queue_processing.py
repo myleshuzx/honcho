@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
 
@@ -54,6 +55,49 @@ class TestQueueProcessing:
             )
         ).scalars()
         assert set(tracked_keys) == set(work_units.keys())
+
+    async def test_get_and_claim_work_units_skips_future_retry(
+        self,
+        db_session: AsyncSession,
+        sample_queue_items: list[models.QueueItem],
+    ) -> None:
+        """Queue items in backoff should not be claimed until next_attempt_at passes."""
+        future_retry_at = datetime.now(timezone.utc) + timedelta(hours=5)
+        for item in sample_queue_items:
+            item.next_attempt_at = future_retry_at
+        await db_session.commit()
+
+        queue_manager = QueueManager()
+        work_units = await queue_manager.get_and_claim_work_units()
+
+        assert work_units == {}
+
+    async def test_transient_error_keeps_item_pending_with_backoff(
+        self,
+        db_session: AsyncSession,
+        sample_queue_items: list[models.QueueItem],
+    ) -> None:
+        """Rate-limit style failures remain pending and retry after the parsed delay."""
+        queue_item = sample_queue_items[0]
+        queue_manager = QueueManager()
+        before = datetime.now(timezone.utc)
+
+        await queue_manager.mark_queue_item_for_retry(
+            queue_item,
+            queue_item.work_unit_key,
+            RuntimeError("plan rate limit: retry after 5h"),
+        )
+
+        refreshed = await db_session.get(models.QueueItem, queue_item.id)
+        assert refreshed is not None
+        assert refreshed.processed is False
+        assert refreshed.error is None
+        assert refreshed.last_error is not None
+        assert refreshed.retry_count == 1
+        assert refreshed.next_attempt_at is not None
+        assert refreshed.next_attempt_at >= before + timedelta(hours=5) - timedelta(
+            seconds=5
+        )
 
     async def test_work_unit_claiming(
         self,
