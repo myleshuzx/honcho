@@ -57,6 +57,21 @@ services:
         required: false
     restart: unless-stopped
 
+  dashboard:
+    profiles: ["dashboard"]
+    build:
+      context: ./honcho-control-plane
+      dockerfile: Dockerfile
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - HONCHO_API_BASE_URL=http://api:8000
+      - HONCHO_ADMIN_TOKEN=${HONCHO_DASHBOARD_ADMIN_TOKEN:-}
+    restart: unless-stopped
+
   database:
     image: pgvector/pgvector:pg15
     restart: unless-stopped
