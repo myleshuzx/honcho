@@ -317,8 +317,12 @@ def append_metrics_to_file(
     if not metrics_file:
         return
 
-    import fcntl
     import time
+
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - Windows compatibility
+        fcntl = None
 
     # Prepare metrics data
     timestamp = time.time()
@@ -333,9 +337,11 @@ def append_metrics_to_file(
 
     # Use file locking to handle concurrent writes from multiple processes
     with open(metrics_file, "a") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         f.write(json.dumps(metrics_entry) + "\n")
-        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        if fcntl is not None:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def load_metrics_from_file(

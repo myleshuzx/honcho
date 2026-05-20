@@ -76,6 +76,18 @@ model = "text-embedding-3-small"
 # base_url = "https://embedding-proxy.internal.example/v1"
 # api_key_env = "EMBEDDING_CUSTOM_API_KEY"
 
+# Rerank settings
+[rerank]
+ENABLED = false
+MODEL = "BAAI/bge-reranker-v2-m3"
+# BASE_URL = "https://rerank-proxy.internal.example/v1"
+# API_KEY_ENV = "RERANK_API_KEY"
+ENDPOINT_PATH = "/rerank"
+CANDIDATE_MULTIPLIER = 5
+MAX_CANDIDATES = 100
+TIMEOUT_SECONDS = 30
+FAIL_OPEN = true
+
 # Deriver settings
 [deriver]
 ENABLED = true

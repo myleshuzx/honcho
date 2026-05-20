@@ -4,7 +4,6 @@ Utility for logging traces from LLM calls.
 This module provides structured JSONL logging of LLM inputs/outputs.
 """
 
-import fcntl
 import json
 import time
 from pathlib import Path
@@ -17,6 +16,21 @@ from src.config import (
     ModelConfig,
     settings,
 )
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows compatibility
+    fcntl = None
+
+
+def _lock_file(file_no: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(file_no, fcntl.LOCK_EX)
+
+
+def _unlock_file(file_no: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(file_no, fcntl.LOCK_UN)
 
 
 def get_reasoning_traces_file_path() -> Path | None:
@@ -98,6 +112,6 @@ def log_reasoning_trace(
 
     # Use file locking to handle concurrent writes from multiple processes
     with open(traces_file, "a") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        _lock_file(f.fileno())
         f.write(json.dumps(trace_entry) + "\n")
-        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        _unlock_file(f.fileno())

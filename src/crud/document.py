@@ -22,6 +22,7 @@ from src.exceptions import (
     ValidationException,
     VectorStoreError,
 )
+from src.rerank_client import apply_rerank_order, rerank
 from src.utils.filter import apply_filter
 from src.vector_store import (
     VectorRecord,
@@ -328,9 +329,10 @@ async def query_documents(
     """
     Query documents using semantic similarity.
 
-    When *db* is provided the caller owns the session lifetime.  When *db* is
-    ``None`` the function opens (and closes) its own short-lived session so that
-    no DB connection is held during external vector-store calls.
+    When *db* is provided the caller owns the session lifetime. When *db* is
+    ``None`` the function opens (and closes) its own short-lived session. If
+    rerank is enabled, candidate fetches always use a short-lived session so the
+    external rerank call happens after the connection is released.
 
     Args:
         db: Database session, or None to let the function manage its own
@@ -346,6 +348,16 @@ async def query_documents(
     Returns:
         Sequence of matching documents
     """
+    requested_top_k = top_k
+    if settings.RERANK.ENABLED:
+        top_k = min(
+            max(
+                requested_top_k,
+                requested_top_k * settings.RERANK.CANDIDATE_MULTIPLIER,
+            ),
+            settings.RERANK.MAX_CANDIDATES,
+        )
+
     # Use provided embedding or generate one
     if embedding is None:
         try:
@@ -356,9 +368,19 @@ async def query_documents(
                 + f"{settings.EMBEDDING.MAX_INPUT_TOKENS}."
             ) from e
 
+    async def _apply_rerank(docs: list[models.Document]) -> list[models.Document]:
+        if not settings.RERANK.ENABLED:
+            return docs[:requested_top_k]
+        reranked = await rerank(
+            query,
+            [doc.content for doc in docs],
+            top_n=requested_top_k,
+        )
+        return apply_rerank_order(docs, reranked, limit=requested_top_k)
+
     if _uses_pgvector():
-        # pgvector path — pure DB, open a short session if none provided
-        if db is not None:
+        # pgvector path — pure DB, open a short session if rerank needs to run
+        if db is not None and not settings.RERANK.ENABLED:
             return await _query_documents_pgvector(
                 db,
                 workspace_name,
@@ -367,8 +389,9 @@ async def query_documents(
                 embedding,
                 filters,
                 max_distance,
-                top_k,
+                requested_top_k,
             )
+
         async with tracked_db("query_documents.pgvector") as managed_db:
             docs = await _query_documents_pgvector(
                 managed_db,
@@ -382,7 +405,7 @@ async def query_documents(
             )
             for doc in docs:
                 managed_db.expunge(doc)
-            return docs
+        return await _apply_rerank(list(docs))
 
     # External vector store — network call first, DB only for the ID fetch
     document_ids = await query_external_vector_document_ids(
@@ -398,7 +421,7 @@ async def query_documents(
     if not document_ids:
         return []
 
-    if db is not None:
+    if db is not None and not settings.RERANK.ENABLED:
         return await fetch_documents_by_ids(
             db=db,
             workspace_name=workspace_name,
@@ -407,6 +430,7 @@ async def query_documents(
             document_ids=document_ids,
             filters=filters,
         )
+
     async with tracked_db("query_documents.fetch") as managed_db:
         docs = await fetch_documents_by_ids(
             db=managed_db,
@@ -418,7 +442,7 @@ async def query_documents(
         )
         for doc in docs:
             managed_db.expunge(doc)
-        return docs
+    return await _apply_rerank(list(docs))
 
 
 async def create_documents(

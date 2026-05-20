@@ -6,7 +6,9 @@ import pytest
 from nanoid import generate as generate_nanoid
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import src.utils.search as search_module
 from src import crud, models
+from src.rerank_client import RerankResult
 from src.utils.search import search
 
 
@@ -75,6 +77,61 @@ async def test_peer_perspective_search_single_session(
     assert len(results) == 2
     assert msg1.public_id in [m.public_id for m in results]
     assert msg2.public_id in [m.public_id for m in results]
+
+
+@pytest.mark.asyncio
+async def test_search_reranks_rrf_candidates(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    workspace = models.Workspace(name=generate_nanoid())
+    db_session.add(workspace)
+    await db_session.flush()
+
+    msg1 = models.Message(
+        content="weak candidate",
+        session_name="session",
+        peer_name="peer",
+        workspace_name=workspace.name,
+        seq_in_session=1,
+    )
+    msg2 = models.Message(
+        content="strong candidate",
+        session_name="session",
+        peer_name="peer",
+        workspace_name=workspace.name,
+        seq_in_session=2,
+    )
+
+    seen: dict[str, object] = {}
+
+    async def fake_fulltext_search(*args, **kwargs):
+        kwargs["db"].add_all([msg1, msg2])
+        seen["fulltext_limit"] = kwargs["limit"]
+        return [msg1, msg2]
+
+    async def fake_rerank(query: str, documents: list[str], *, top_n: int | None):
+        seen["rerank_documents"] = documents
+        seen["top_n"] = top_n
+        return [RerankResult(index=1, score=0.9)]
+
+    monkeypatch.setattr(search_module.settings, "EMBED_MESSAGES", False)
+    monkeypatch.setattr(search_module.settings.RERANK, "ENABLED", True)
+    monkeypatch.setattr(search_module.settings.RERANK, "CANDIDATE_MULTIPLIER", 4)
+    monkeypatch.setattr(search_module.settings.RERANK, "MAX_CANDIDATES", 100)
+    monkeypatch.setattr(search_module, "_fulltext_search", fake_fulltext_search)
+    monkeypatch.setattr(search_module, "rerank", fake_rerank)
+
+    results = await search(
+        "query",
+        filters={"workspace_id": workspace.name},
+        limit=1,
+    )
+
+    assert seen["fulltext_limit"] == 8
+    assert seen["rerank_documents"] == ["weak candidate", "strong candidate"]
+    assert seen["top_n"] == 1
+    assert [message.content for message in results] == ["strong candidate"]
 
 
 @pytest.mark.asyncio

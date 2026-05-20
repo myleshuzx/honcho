@@ -530,6 +530,7 @@ class TomlConfigSettingsSource(PydanticBaseSettingsSource):
         "CACHE": "cache",
         "LLM": "llm",
         "EMBEDDING": "embedding",
+        "RERANK": "rerank",
         "DERIVER": "deriver",
         "PEER_CARD": "peer_card",
         "DIALECTIC": "dialectic",
@@ -724,6 +725,27 @@ class EmbeddingSettings(HonchoSettings):
         if self.MODEL_CONFIG.model in _EMBEDDING_KNOWN_REJECTING_MODELS:
             return False
         return "VECTOR_DIMENSIONS" in self.model_fields_set
+
+
+class RerankSettings(HonchoSettings):
+    model_config = SettingsConfigDict(  # pyright: ignore
+        env_prefix="RERANK_", extra="ignore"
+    )
+
+    ENABLED: bool = False
+    MODEL: str = "BAAI/bge-reranker-v2-m3"
+    BASE_URL: str | None = None
+    API_KEY: str | None = None
+    API_KEY_ENV: str | None = None
+    ENDPOINT_PATH: str = "/rerank"
+    CANDIDATE_MULTIPLIER: Annotated[int, Field(default=5, ge=1, le=20)] = 5
+    MAX_CANDIDATES: Annotated[int, Field(default=100, ge=1, le=500)] = 100
+    TIMEOUT_SECONDS: Annotated[float, Field(default=30.0, gt=0.0, le=300.0)] = 30.0
+    FAIL_OPEN: bool = True
+
+    @property
+    def resolved_api_key(self) -> str | None:
+        return _resolve_secret(self.API_KEY, self.API_KEY_ENV)
 
 
 class DeriverSettings(HonchoSettings):
@@ -1271,6 +1293,7 @@ class AppSettings(HonchoSettings):
     SENTRY: SentrySettings = Field(default_factory=SentrySettings)
     LLM: LLMSettings = Field(default_factory=LLMSettings)
     EMBEDDING: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    RERANK: RerankSettings = Field(default_factory=RerankSettings)
     DERIVER: DeriverSettings = Field(default_factory=DeriverSettings)
     DIALECTIC: DialecticSettings = Field(default_factory=DialecticSettings)
     PEER_CARD: PeerCardSettings = Field(default_factory=PeerCardSettings)

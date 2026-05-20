@@ -5,8 +5,10 @@ from nanoid import generate as generate_nanoid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import src.crud.document as document_crud
 from src import crud, models, schemas
 from src.exceptions import ResourceNotFoundException
+from src.rerank_client import RerankResult
 
 
 class TestDocumentCRUD:
@@ -312,6 +314,76 @@ class TestDocumentCRUD:
 
         assert len(results) == 1
         assert results[0].id == times_derived_map[2]
+
+    @pytest.mark.asyncio
+    async def test_query_documents_reranks_oversampled_candidates(
+        self,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+        sample_data: tuple[models.Workspace, models.Peer],
+    ):
+        """Rerank should reorder oversampled vector candidates before truncating."""
+        test_workspace, test_peer = sample_data
+        test_peer2, test_session, _ = await self._setup_test_data(
+            db_session, test_workspace, test_peer
+        )
+
+        docs = [
+            models.Document(
+                id="doc-a",
+                workspace_name=test_workspace.name,
+                observer=test_peer.name,
+                observed=test_peer2.name,
+                content="weak candidate",
+                session_name=test_session.name,
+            ),
+            models.Document(
+                id="doc-b",
+                workspace_name=test_workspace.name,
+                observer=test_peer.name,
+                observed=test_peer2.name,
+                content="strong candidate",
+                session_name=test_session.name,
+            ),
+        ]
+
+        seen: dict[str, object] = {}
+
+        async def fake_query_documents_pgvector(*args, **kwargs):
+            active_db = args[0]
+            active_db.add_all(docs)
+            seen["top_k"] = args[-1]
+            return docs
+
+        async def fake_rerank(query: str, documents: list[str], *, top_n: int | None):
+            seen["rerank_documents"] = documents
+            seen["top_n"] = top_n
+            return [RerankResult(index=1, score=0.99)]
+
+        monkeypatch.setattr(document_crud.settings.RERANK, "ENABLED", True)
+        monkeypatch.setattr(
+            document_crud.settings.RERANK, "CANDIDATE_MULTIPLIER", 5
+        )
+        monkeypatch.setattr(document_crud.settings.RERANK, "MAX_CANDIDATES", 100)
+        monkeypatch.setattr(
+            document_crud, "_query_documents_pgvector", fake_query_documents_pgvector
+        )
+        monkeypatch.setattr(document_crud, "rerank", fake_rerank)
+
+        results = await crud.query_documents(
+            db_session,
+            workspace_name=test_workspace.name,
+            query="important query",
+            observer=test_peer.name,
+            observed=test_peer2.name,
+            top_k=1,
+            embedding=[0.5] * 1536,
+        )
+
+        assert seen["top_k"] == 5
+        assert seen["rerank_documents"] == ["weak candidate", "strong candidate"]
+        assert seen["top_n"] == 1
+        assert [doc.id for doc in results] == ["doc-b"]
 
     @pytest.mark.asyncio
     async def test_delete_document_success(

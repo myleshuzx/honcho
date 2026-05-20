@@ -17,6 +17,7 @@ from src.dependencies import tracked_db
 from src.embedding_client import embedding_client
 from src.exceptions import ValidationException
 from src.models import session_peers_table
+from src.rerank_client import apply_rerank_order, rerank
 from src.utils.filter import apply_filter
 from src.utils.formatting import ILIKE_ESCAPE_CHAR, escape_ilike_pattern
 from src.vector_store import get_external_vector_store
@@ -374,7 +375,16 @@ async def search(
         if isinstance(workspace_value, str):
             workspace_name = workspace_value
 
-    semantic_limit = limit * 4 if peer_perspective_name else limit * 2
+    candidate_limit = limit
+    if settings.RERANK.ENABLED:
+        candidate_limit = min(
+            max(limit, limit * settings.RERANK.CANDIDATE_MULTIPLIER),
+            settings.RERANK.MAX_CANDIDATES,
+        )
+
+    semantic_limit = (
+        candidate_limit * 4 if peer_perspective_name else candidate_limit * 2
+    )
     query_embedding: list[float] | None = None
     semantic_message_ids: list[str] | None = None
 
@@ -431,18 +441,26 @@ async def search(
             db=active_db,
             query=query,
             stmt=stmt,
-            limit=limit * 2,
+            limit=candidate_limit * 2,
         )
         search_results.append(fulltext_results)
 
         if len(search_results) > 1:
-            return reciprocal_rank_fusion(*search_results, limit=limit)
+            return reciprocal_rank_fusion(*search_results, limit=candidate_limit)
         if len(search_results) == 1:
-            return search_results[0][:limit]
+            return search_results[0][:candidate_limit]
         return []
 
     async with tracked_db("search.messages") as managed_db:
         combined_results = await _run_search(managed_db)
         for message in combined_results:
             managed_db.expunge(message)
-        return combined_results
+
+    if settings.RERANK.ENABLED:
+        reranked = await rerank(
+            query,
+            [message.content for message in combined_results],
+            top_n=limit,
+        )
+        return apply_rerank_order(combined_results, reranked, limit=limit)
+    return combined_results[:limit]

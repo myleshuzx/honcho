@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import sys
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -37,6 +39,9 @@ from src.exceptions import HonchoException
 from src.main import app
 from src.models import Peer, Workspace
 from src.security import JWTParams, create_admin_jwt, create_jwt
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 # Create a custom handler that doesn't get closed prematurely
@@ -160,7 +165,7 @@ async def setup_test_database(db_url: URL):
     Returns:
         engine: SQLAlchemy engine
     """
-    engine = create_async_engine(str(db_url), echo=False)
+    engine = create_async_engine(db_url.render_as_string(hide_password=False), echo=False)
     async with engine.connect() as conn:
         try:
             logger.info("Attempting to create pgvector extension...")
