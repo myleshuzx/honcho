@@ -68,17 +68,19 @@ function ObservationTable({ observations }: { observations: Observation[] }) {
   );
 }
 
-function DeductiveTable({
+function DerivedObservationTable({
   observations,
   selected,
-  onSelect
+  onSelect,
+  level
 }: {
   observations: Observation[];
   selected: Observation | null;
   onSelect: (observation: Observation) => void;
+  level: "inductive" | "deductive";
 }) {
   if (observations.length === 0) {
-    return <div className="empty card">No deductive observations found on this page.</div>;
+    return <div className="empty card">No {level} observations found on this page.</div>;
   }
 
   return (
@@ -86,7 +88,7 @@ function DeductiveTable({
       <table>
         <thead>
           <tr>
-            <th>Deduction</th>
+            <th>{level === "deductive" ? "Deduction" : "Induction"}</th>
             <th>Sources</th>
             <th>Session</th>
             <th>Created</th>
@@ -104,7 +106,7 @@ function DeductiveTable({
               }}
             >
               <td>
-                <span className="pill deductive">deductive</span>
+                <span className={`pill ${level}`}>{level}</span>
                 <div style={{ marginTop: 8 }}>{observation.content}</div>
               </td>
               <td>{observation.source_ids.length}</td>
@@ -119,17 +121,22 @@ function DeductiveTable({
   );
 }
 
-function DeductionDetail({
+function DerivationDetail({
   observation,
   sources,
-  sourceMessages
+  sourceMessages,
+  level
 }: {
   observation: Observation | null;
   sources: Record<string, Observation>;
   sourceMessages: Record<string, SourceMessage[]>;
+  level: "inductive" | "deductive";
 }) {
+  const label = level === "deductive" ? "deduction" : "induction";
+  const title = level === "deductive" ? "Deduction Sources" : "Induction Sources";
+
   if (!observation) {
-    return <div className="empty card">Select a deductive observation to inspect its sources.</div>;
+    return <div className="empty card">Select a {label} observation to inspect its sources.</div>;
   }
 
   const sourceRows = observation.source_ids.map((id) => sources[id]).filter(Boolean);
@@ -143,16 +150,16 @@ function DeductionDetail({
   return (
     <div className="card">
       <div className="card-header">
-        <h2 className="card-title">Deduction Sources</h2>
+        <h2 className="card-title">{title}</h2>
         <p className="card-subtitle">
-          Created {formatDate(observation.created_at)} · source time {formatDate(observation.source_created_at)}
+          Created {formatDate(observation.created_at)} - source time {formatDate(observation.source_created_at)}
         </p>
       </div>
       <div className="card-body">
         <div style={{ marginBottom: 16, lineHeight: 1.6 }}>{observation.content}</div>
         {sourceRows.length === 0 ? (
           <div className="muted">
-            This deduction references {observation.source_ids.length} source id(s), but none are loaded in the current response.
+            This {label} references {observation.source_ids.length} source id(s), but none are loaded in the current response.
           </div>
         ) : (
           <div className="grid">
@@ -300,7 +307,7 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
   const [selectedPair, setSelectedPair] = useState<PeerPair | null>(null);
   const [representation, setRepresentation] = useState<RepresentationResponse | null>(null);
   const [peerCard, setPeerCard] = useState<PeerCardResponse | null>(null);
-  const [selectedDeduction, setSelectedDeduction] = useState<Observation | null>(null);
+  const [selectedDerivation, setSelectedDerivation] = useState<Observation | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -313,7 +320,7 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
   }, [workspaceId, page]);
 
   useEffect(() => {
-    setSelectedDeduction(null);
+    setSelectedDerivation(null);
   }, [page, observationTab]);
 
   const currentObservations = data?.observations[observationTab] ?? [];
@@ -469,20 +476,22 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
               Next
             </button>
           </div>
-          {observationTab === "deductive" ? (
+          {observationTab === "inductive" || observationTab === "deductive" ? (
             <div className="grid cols-2">
-              <DeductiveTable
+              <DerivedObservationTable
                 observations={currentObservations}
-                selected={selectedDeduction}
-                onSelect={setSelectedDeduction}
+                selected={selectedDerivation}
+                onSelect={setSelectedDerivation}
+                level={observationTab}
               />
-              <DeductionDetail
-                observation={selectedDeduction}
+              <DerivationDetail
+                observation={selectedDerivation}
                 sources={data.source_documents}
                 sourceMessages={data.source_messages}
+                level={observationTab}
               />
             </div>
-          ) : observationTab === "explicit" || observationTab === "inductive" ? (
+          ) : observationTab === "explicit" ? (
             <div className="grid cols-2">
               <Timeline observations={currentObservations} />
               <ObservationTable observations={currentObservations} />

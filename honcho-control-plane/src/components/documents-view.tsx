@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, RefreshCw, Upload } from "lucide-react";
+import { FileText, Keyboard, RefreshCw, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { DocumentInfo } from "@/lib/types";
@@ -16,6 +16,9 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [importMode, setImportMode] = useState<"file" | "text">("file");
+  const [textTitle, setTextTitle] = useState("Pasted text");
+  const [textContent, setTextContent] = useState("");
   const [peerId, setPeerId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [createdAt, setCreatedAt] = useState("");
@@ -81,6 +84,41 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
     }
   }
 
+  async function importTextDocument() {
+    if (!textContent.trim() || !peerId.trim()) return;
+
+    setUploading(true);
+    setError(null);
+    setUploadMessage(null);
+    try {
+      const parsedMetadata = JSON.parse(metadata || "{}");
+      const response = await api.importTextDocument(workspaceId, {
+        title: textTitle.trim() || "Pasted text",
+        content: textContent,
+        peer_id: peerId.trim(),
+        session_id: sessionId.trim() || undefined,
+        created_at: createdAt ? new Date(createdAt).toISOString() : undefined,
+        metadata: parsedMetadata,
+        max_chars: maxChars.trim() ? Number(maxChars) : undefined,
+        enqueue_processing: enqueueProcessing
+      });
+      setUploadMessage(
+        `${response.document.filename ?? response.document.id}: ${response.messages_created} messages created${response.queued ? " and queued" : ""}.`
+      );
+      setTextContent("");
+      loadDocuments();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const canImport =
+    importMode === "file"
+      ? Boolean(file && peerId && !uploading)
+      : Boolean(textContent.trim() && peerId && !uploading);
+
   return (
     <div>
       <div className="page-title">
@@ -96,15 +134,40 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="card-header">
           <h2 className="card-title">Import Document</h2>
-          <p className="card-subtitle">Upload a text-like file, split it into Honcho messages, and optionally enqueue memory processing.</p>
+          <p className="card-subtitle">Upload a file or paste text, split it into Honcho messages, and optionally enqueue memory processing.</p>
         </div>
         <div className="card-body">
+          <div className="segmented" aria-label="Import mode">
+            <button
+              className={importMode === "file" ? "active" : ""}
+              onClick={() => setImportMode("file")}
+              type="button"
+            >
+              <Upload size={15} /> File
+            </button>
+            <button
+              className={importMode === "text" ? "active" : ""}
+              onClick={() => setImportMode("text")}
+              type="button"
+            >
+              <Keyboard size={15} /> Text
+            </button>
+          </div>
           <div className="toolbar">
-            <input
-              className="input file-input"
-              type="file"
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-            />
+            {importMode === "file" ? (
+              <input
+                className="input file-input"
+                type="file"
+                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+              />
+            ) : (
+              <input
+                className="input file-input"
+                value={textTitle}
+                onChange={(event) => setTextTitle(event.target.value)}
+                placeholder="document title"
+              />
+            )}
             <select className="select peer-select" value={peerId} onChange={(event) => setPeerId(event.target.value)}>
               <option value="">peer</option>
               {peerOptions.map((peer) => (
@@ -140,10 +203,23 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
               />
               enqueue
             </label>
-            <button className="button primary" onClick={uploadDocument} disabled={!file || !peerId || uploading}>
-              <Upload size={16} /> {uploading ? "Importing" : "Import"}
+            <button
+              className="button primary"
+              onClick={importMode === "file" ? uploadDocument : importTextDocument}
+              disabled={!canImport}
+            >
+              {importMode === "file" ? <Upload size={16} /> : <Keyboard size={16} />}
+              {uploading ? "Importing" : "Import"}
             </button>
           </div>
+          {importMode === "text" && (
+            <textarea
+              className="textarea document-textarea"
+              value={textContent}
+              onChange={(event) => setTextContent(event.target.value)}
+              placeholder="Paste text to import as a document"
+            />
+          )}
           <textarea
             className="textarea metadata-textarea"
             value={metadata}

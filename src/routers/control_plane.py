@@ -11,10 +11,12 @@ from fastapi import (
     Depends,
     File,
     Form,
+    HTTPException,
     Path,
     Query,
     UploadFile,
 )
+from nanoid import generate as generate_nanoid
 from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,12 +26,13 @@ from src import crud, models, schemas
 from src.config import ReasoningLevel, settings
 from src.dependencies import db
 from src.deriver import enqueue
+from src.deriver.enqueue import enqueue_dream
 from src.dialectic.chat import agentic_chat
 from src.embedding_client import embedding_client
 from src.exceptions import FileTooLargeError
 from src.security import require_auth
 from src.utils import summarizer
-from src.utils.files import process_file_uploads_for_messages
+from src.utils.files import process_file_uploads_for_messages, split_text_into_chunks
 from src.utils.representation import flatten_message_ids
 from src.utils.search import search
 
@@ -57,6 +60,29 @@ class ControlPlaneReflectRequest(BaseModel):
     target: str | None = None
     session_id: str | None = None
     reasoning_level: ReasoningLevel = "low"
+
+
+class ControlPlaneTextImportRequest(BaseModel):
+    title: str = Field(default="Pasted text", min_length=1, max_length=256)
+    content: str = Field(..., min_length=1)
+    peer_id: str = Field(..., min_length=1)
+    session_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    configuration: dict[str, Any] | None = None
+    created_at: str | None = None
+    max_chars: int = Field(
+        default=settings.MAX_MESSAGE_SIZE,
+        ge=1000,
+        le=settings.MAX_MESSAGE_SIZE,
+    )
+    enqueue_processing: bool = True
+
+
+class ControlPlaneScheduleDreamRequest(BaseModel):
+    observer: str = Field(..., min_length=1)
+    observed: str | None = None
+    dream_type: schemas.DreamType = schemas.DreamType.OMNI
+    session_id: str | None = None
 
 
 def _iso(value: datetime.datetime | None) -> str | None:
@@ -625,6 +651,9 @@ async def list_workspace_documents(
     total_chunks_expr = func.jsonb_extract_path_text(
         models.Message.internal_metadata, "total_chunks"
     )
+    source_type_expr = func.jsonb_extract_path_text(
+        models.Message.internal_metadata, "source_type"
+    )
 
     stmt = (
         select(
@@ -633,6 +662,7 @@ async def list_workspace_documents(
             content_type_expr.label("content_type"),
             original_size_expr.label("original_file_size"),
             total_chunks_expr.label("total_chunks"),
+            source_type_expr.label("source_type"),
             func.min(models.Message.created_at).label("created_at"),
             func.max(models.Message.created_at).label("updated_at"),
             func.count(models.Message.id).label("chunk_count"),
@@ -643,7 +673,14 @@ async def list_workspace_documents(
             models.Message.workspace_name == workspace_id,
             file_id_expr.isnot(None),
         )
-        .group_by(file_id_expr, filename_expr, content_type_expr, original_size_expr, total_chunks_expr)
+        .group_by(
+            file_id_expr,
+            filename_expr,
+            content_type_expr,
+            original_size_expr,
+            total_chunks_expr,
+            source_type_expr,
+        )
         .order_by(func.max(models.Message.created_at).desc())
         .limit(limit)
     )
@@ -658,7 +695,7 @@ async def list_workspace_documents(
             "chunk_count": int(row.chunk_count or 0),
             "session_id": row.session_id,
             "peer_id": row.peer_id,
-            "source_type": "file_upload",
+            "source_type": row.source_type or "file_upload",
             "created_at": _iso(row.created_at),
             "updated_at": _iso(row.updated_at),
         }
@@ -752,6 +789,7 @@ async def upload_workspace_document(
             **parsed_metadata,
             "filename": file.filename,
             "dashboard_import": True,
+            "source_type": "file_upload",
         },
         configuration=schemas.MessageConfiguration(**parsed_configuration)
         if parsed_configuration
@@ -772,6 +810,7 @@ async def upload_workspace_document(
             {
                 **upload_item["file_metadata"],
                 "dashboard_import": True,
+                "source_type": "file_upload",
             }
         )
         flag_modified(message, "internal_metadata")
@@ -816,6 +855,150 @@ async def upload_workspace_document(
         },
         "messages_created": len(created_messages),
         "queued": enqueue_processing,
+    }
+
+
+@router.post(
+    "/workspaces/{workspace_id}/documents/text",
+    dependencies=[Depends(require_auth(workspace_name="workspace_id"))],
+    status_code=201,
+)
+async def import_workspace_text_document(
+    background_tasks: BackgroundTasks,
+    body: ControlPlaneTextImportRequest = Body(...),
+    workspace_id: str = Path(...),
+    db: AsyncSession = db,
+) -> dict[str, Any]:
+    content_size = len(body.content.encode("utf-8"))
+    if content_size > settings.MAX_FILE_SIZE:
+        raise FileTooLargeError(
+            f"Text size ({content_size} bytes) exceeds maximum allowed size "
+            f"({settings.MAX_FILE_SIZE} bytes)",
+        )
+
+    parsed_created_at = _parse_created_at(body.created_at)
+    target_session_id = body.session_id or _safe_session_name(body.title)
+    configuration = (
+        schemas.MessageConfiguration(**body.configuration)
+        if body.configuration
+        else None
+    )
+    chunks = split_text_into_chunks(body.content, max_chars=body.max_chars)
+    file_id = generate_nanoid()
+
+    message_creates = [
+        schemas.MessageCreate(
+            content=chunk or "",
+            peer_id=body.peer_id,
+            metadata={
+                **body.metadata,
+                "filename": body.title,
+                "dashboard_import": True,
+                "source_type": "text_input",
+            },
+            configuration=configuration,
+            created_at=parsed_created_at,
+        )
+        for chunk in chunks
+    ]
+    created_messages = await crud.create_messages(
+        db,
+        messages=message_creates,
+        workspace_name=workspace_id,
+        session_name=target_session_id,
+    )
+
+    for index, message in enumerate(created_messages):
+        message.internal_metadata.update(
+            {
+                "file_id": file_id,
+                "filename": body.title,
+                "chunk_index": index,
+                "total_chunks": len(chunks),
+                "original_file_size": content_size,
+                "content_type": "text/plain",
+                "chunk_character_range": [
+                    index * body.max_chars,
+                    min((index + 1) * body.max_chars, len(body.content)),
+                ],
+                "dashboard_import": True,
+                "source_type": "text_input",
+            }
+        )
+        flag_modified(message, "internal_metadata")
+    await db.commit()
+
+    if body.enqueue_processing:
+        payloads = [
+            {
+                "workspace_name": workspace_id,
+                "session_name": target_session_id,
+                "message_id": message.id,
+                "content": message.content,
+                "peer_name": message.peer_name,
+                "created_at": message.created_at,
+                "message_public_id": message.public_id,
+                "seq_in_session": message.seq_in_session,
+                "configuration": body.configuration,
+            }
+            for message in created_messages
+        ]
+        background_tasks.add_task(enqueue, payloads)
+
+    return {
+        "workspace_id": workspace_id,
+        "document": {
+            "id": file_id,
+            "filename": body.title,
+            "content_type": "text/plain",
+            "original_file_size": content_size,
+            "total_chunks": len(chunks),
+            "chunk_count": len(created_messages),
+            "session_id": target_session_id,
+            "peer_id": body.peer_id,
+            "source_type": "text_input",
+            "created_at": _iso(created_messages[0].created_at)
+            if created_messages
+            else None,
+            "updated_at": _iso(created_messages[-1].created_at)
+            if created_messages
+            else None,
+        },
+        "messages_created": len(created_messages),
+        "queued": body.enqueue_processing,
+    }
+
+
+@router.post(
+    "/workspaces/{workspace_id}/dream",
+    dependencies=[Depends(require_auth(workspace_name="workspace_id"))],
+    status_code=202,
+)
+async def schedule_workspace_dream_from_control_plane(
+    body: ControlPlaneScheduleDreamRequest = Body(...),
+    workspace_id: str = Path(...),
+) -> dict[str, Any]:
+    if not settings.DREAM.ENABLED:
+        raise HTTPException(
+            status_code=400,
+            detail="Dreams are not enabled in the system configuration",
+        )
+
+    observed = body.observed if body.observed is not None else body.observer
+    await enqueue_dream(
+        workspace_id,
+        observer=body.observer,
+        observed=observed,
+        dream_type=body.dream_type,
+        session_name=body.session_id,
+    )
+    return {
+        "workspace_id": workspace_id,
+        "observer": body.observer,
+        "observed": observed,
+        "dream_type": body.dream_type.value,
+        "session_id": body.session_id,
+        "queued": True,
     }
 
 

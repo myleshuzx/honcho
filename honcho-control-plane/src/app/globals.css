@@ -288,6 +288,34 @@ a {
   margin-bottom: 14px;
 }
 
+.segmented {
+  display: inline-flex;
+  height: 38px;
+  padding: 3px;
+  margin-bottom: 14px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+
+.segmented button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  font-weight: 650;
+}
+
+.segmented button.active {
+  background: white;
+  color: var(--primary-strong);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+}
+
 .input,
 .textarea,
 .select {
@@ -331,6 +359,12 @@ a {
   min-height: 72px;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
+}
+
+.textarea.document-textarea {
+  min-height: 180px;
+  margin-bottom: 14px;
+  line-height: 1.5;
 }
 
 .check-label {
