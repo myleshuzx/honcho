@@ -9,6 +9,8 @@ function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : "Unknown";
 }
 
+const MAX_IMPORT_CHARS = 25000;
+
 export function DocumentsView({ workspaceId }: { workspaceId: string }) {
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -22,7 +24,7 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
   const [peerId, setPeerId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [createdAt, setCreatedAt] = useState("");
-  const [maxChars, setMaxChars] = useState("60000");
+  const [maxChars, setMaxChars] = useState(String(MAX_IMPORT_CHARS));
   const [enqueueProcessing, setEnqueueProcessing] = useState(true);
   const [metadata, setMetadata] = useState("{}");
   const [peerOptions, setPeerOptions] = useState<string[]>([]);
@@ -191,6 +193,7 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
               className="input page-input"
               type="number"
               min={1000}
+              max={MAX_IMPORT_CHARS}
               value={maxChars}
               onChange={(event) => setMaxChars(event.target.value)}
               title="max chars per message chunk"
