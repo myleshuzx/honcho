@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.schemas.api import MessageCreate
 from src.schemas.configuration import SessionPeerConfig
-from src.utils.types import DocumentLevel
+from src.utils.types import DocumentLevel, TemporalConfidence, TemporalKind
 
 
 class ReconcilerType(str, Enum):
@@ -88,6 +88,34 @@ class DocumentCreate(DocumentBase):
         default=None,
         description="Document IDs of source/premise documents -- for deductive and inductive documents",
     )
+    generated_at: datetime | None = Field(
+        default=None,
+        description="Timestamp when Honcho generated this document.",
+    )
+    observed_at: datetime | None = Field(
+        default=None,
+        description="Timestamp when the source information was observed or recorded.",
+    )
+    occurred_at: datetime | None = Field(
+        default=None,
+        description="Timestamp when the described event occurred, when known.",
+    )
+    temporal_kind: TemporalKind = Field(
+        default="unknown",
+        description="Temporal semantics of the document content.",
+    )
+    temporal_confidence: TemporalConfidence = Field(
+        default="none",
+        description="How the temporal fields were assigned.",
+    )
+    evidence_observed_from: datetime | None = Field(
+        default=None,
+        description="Earliest observed_at among source evidence for derived documents.",
+    )
+    evidence_observed_to: datetime | None = Field(
+        default=None,
+        description="Latest observed_at among source evidence for derived documents.",
+    )
 
 
 class ObservationInput(BaseModel):
@@ -103,6 +131,9 @@ class ObservationInput(BaseModel):
         | None
     ) = None
     confidence: Literal["high", "medium", "low"] | None = None
+    temporal_kind: TemporalKind = "unknown"
+    occurred_at: datetime | None = None
+    temporal_evidence: str | None = None
 
     @field_validator("content", mode="after")
     @classmethod

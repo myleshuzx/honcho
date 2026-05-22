@@ -9,7 +9,11 @@ from src import models
 from src.config import settings
 from src.deriver.deriver import process_representation_tasks_batch
 from src.llm import HonchoLLMCallResponse
-from src.utils.representation import PromptRepresentation, Representation
+from src.utils.representation import (
+    ExplicitObservationBase,
+    PromptRepresentation,
+    Representation,
+)
 from src.utils.work_unit import construct_work_unit_key, parse_work_unit_key
 
 
@@ -128,6 +132,71 @@ class TestDeriverProcessing:
         if await_args is None:
             raise AssertionError("Expected deriver LLM call")
         assert await_args.kwargs["prompt"] == "prompt"
+
+    async def test_process_representation_tasks_batch_excludes_system_trigger_from_source_time(
+        self,
+    ) -> None:
+        diary_time = datetime(2018, 8, 31, tzinfo=timezone.utc)
+        trigger_time = datetime(2026, 5, 22, tzinfo=timezone.utc)
+        diary_message = Mock(
+            id=119,
+            public_id="msg_diary",
+            session_name="diary-2018-08",
+            workspace_name="workspace-1",
+            peer_name="diary_author",
+            content="Today made progress on 50K.",
+            token_count=5,
+            created_at=diary_time,
+            h_metadata={"source": "diary"},
+        )
+        system_trigger = Mock(
+            id=120,
+            public_id="msg_trigger",
+            session_name="diary-2018-08",
+            workspace_name="workspace-1",
+            peer_name="diary_author",
+            content="[System] Please analyze all previous diary entries.",
+            token_count=7,
+            created_at=trigger_time,
+            h_metadata={"system_trigger": "deriver"},
+        )
+        configuration = Mock()
+        configuration.reasoning.enabled = True
+        configuration.reasoning.custom_instructions = None
+
+        mock_response = HonchoLLMCallResponse(
+            content=PromptRepresentation(
+                explicit=[ExplicitObservationBase(content="diary_author made 50K progress")]
+            ),
+            input_tokens=10,
+            output_tokens=5,
+            finish_reasons=["STOP"],
+        )
+
+        with (
+            patch(
+                "src.deriver.deriver.honcho_llm_call",
+                new_callable=AsyncMock,
+                return_value=mock_response,
+            ),
+            patch(
+                "src.deriver.deriver.RepresentationManager.save_representation",
+                new_callable=AsyncMock,
+            ) as mock_save,
+        ):
+            await process_representation_tasks_batch(
+                messages=[diary_message, system_trigger],
+                message_level_configuration=configuration,
+                observers=["diary_author"],
+                observed="diary_author",
+                queue_item_message_ids=[119, 120],
+            )
+
+        mock_save.assert_awaited_once()
+        args = mock_save.await_args.args
+        assert args[1] == [119]
+        assert args[3] == diary_time
+        assert args[5] == {119: diary_time}
 
     async def test_work_unit_key_generation(
         self,

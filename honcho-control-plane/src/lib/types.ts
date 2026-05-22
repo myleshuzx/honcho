@@ -26,6 +26,17 @@ export type OverviewResponse = {
 
 export type ObservationLevel = "explicit" | "inductive" | "deductive" | "contradiction";
 
+export type ObservationTemporal = {
+  observed_at: string | null;
+  occurred_at: string | null;
+  generated_at: string | null;
+  evidence_observed_from: string | null;
+  evidence_observed_to: string | null;
+  temporal_kind: string | null;
+  temporal_confidence: string | null;
+  source_count: number;
+};
+
 export type Observation = {
   id: string;
   workspace_id: string;
@@ -42,6 +53,8 @@ export type Observation = {
   sync_attempts: number;
   last_sync_at: string | null;
   created_at: string | null;
+  generated_at: string | null;
+  temporal: ObservationTemporal | null;
 };
 
 export type SourceMessage = {
@@ -56,6 +69,7 @@ export type SourceMessage = {
   token_count: number;
   seq_in_session: number;
   created_at: string | null;
+  ingested_at: string | null;
 };
 
 export type SessionInfo = {

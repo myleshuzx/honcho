@@ -212,6 +212,14 @@ class RepresentationManager:
                 premises=obs_premises,
                 message_created_at=format_datetime_utc(observation_created_at),
             )
+            explicit_event_occurred_at = (
+                obs.occurred_at
+                if isinstance(obs, ExplicitObservation)
+                and obs.temporal_kind == "event"
+                and obs.occurred_at is not None
+                and obs.temporal_evidence
+                else None
+            )
 
             documents_to_create.append(
                 schemas.DocumentCreate(
@@ -221,6 +229,18 @@ class RepresentationManager:
                     level=obs_level,
                     metadata=metadata,
                     embedding=embedding,
+                    observed_at=observation_created_at,
+                    occurred_at=explicit_event_occurred_at,
+                    temporal_kind=obs.temporal_kind
+                    if isinstance(obs, ExplicitObservation)
+                    and obs.temporal_kind != "unknown"
+                    else "observation",
+                    temporal_confidence="explicit"
+                    if not (
+                        isinstance(obs, ExplicitObservation)
+                        and explicit_event_occurred_at is not None
+                    )
+                    else "inferred",
                 )
             )
 

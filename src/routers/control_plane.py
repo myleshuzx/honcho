@@ -102,11 +102,13 @@ def _message_payload(message: models.Message) -> dict[str, Any]:
         "token_count": message.token_count,
         "seq_in_session": message.seq_in_session,
         "created_at": _iso(message.created_at),
+        "ingested_at": _iso(message.ingested_at),
     }
 
 
 def _document_payload(document: models.Document) -> dict[str, Any]:
     source_created_at = document.internal_metadata.get("message_created_at")
+    observed_at = document.observed_at or document.created_at
     return {
         "id": document.id,
         "workspace_id": document.workspace_name,
@@ -127,6 +129,17 @@ def _document_payload(document: models.Document) -> dict[str, Any]:
         "sync_attempts": document.sync_attempts,
         "last_sync_at": _iso(document.last_sync_at),
         "created_at": _iso(document.created_at),
+        "generated_at": _iso(document.generated_at),
+        "temporal": {
+            "observed_at": _iso(observed_at),
+            "occurred_at": _iso(document.occurred_at),
+            "generated_at": _iso(document.generated_at),
+            "evidence_observed_from": _iso(document.evidence_observed_from),
+            "evidence_observed_to": _iso(document.evidence_observed_to),
+            "temporal_kind": document.temporal_kind,
+            "temporal_confidence": document.temporal_confidence,
+            "source_count": len(document.source_ids or []),
+        },
     }
 
 

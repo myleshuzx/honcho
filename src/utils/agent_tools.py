@@ -1,9 +1,10 @@
 import asyncio
 import logging
+import re
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from pydantic import ValidationError
@@ -31,7 +32,7 @@ from src.utils.formatting import (
     utc_now_iso,
 )
 from src.utils.representation import Representation
-from src.utils.types import get_current_iteration
+from src.utils.types import TemporalConfidence, TemporalKind, get_current_iteration
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,27 @@ def _base_observation_properties() -> dict[str, Any]:
                 "(For inductive only) Confidence level: 'high' for 5+ sources, "
                 + "'medium' for 3-4, 'low' for 2"
             ),
+        },
+        "temporal_kind": {
+            "type": "string",
+            "enum": [
+                "event",
+                "observation",
+                "state",
+                "preference",
+                "pattern",
+                "contradiction",
+                "unknown",
+            ],
+            "description": "Temporal nature of the observation. Use 'event' only for facts that happened at a time; use 'preference', 'state', or 'pattern' when no occurred_at should be assigned.",
+        },
+        "occurred_at": {
+            "type": "string",
+            "description": "Optional ISO timestamp/date for when the event occurred. Only include when the source text contains explicit time evidence or a resolvable relative time.",
+        },
+        "temporal_evidence": {
+            "type": "string",
+            "description": "Short source phrase supporting occurred_at, such as an absolute date or relative phrase like 'yesterday'. Required if occurred_at is provided.",
         },
     }
 
@@ -213,6 +235,9 @@ def _deductive_observation_item_schema() -> dict[str, Any]:
                 "minItems": 1,
                 "description": "Required human-readable premise text matching the source observations. Write in Simplified Chinese and omit reasoning traces.",
             },
+            "temporal_kind": _base_observation_properties()["temporal_kind"],
+            "occurred_at": _base_observation_properties()["occurred_at"],
+            "temporal_evidence": _base_observation_properties()["temporal_evidence"],
         },
         "required": ["content", "source_ids", "premises"],
         "additionalProperties": False,
@@ -255,6 +280,7 @@ def _inductive_observation_item_schema() -> dict[str, Any]:
                 "enum": ["high", "medium", "low"],
                 "description": "Required confidence level based on evidence count",
             },
+            "temporal_kind": _base_observation_properties()["temporal_kind"],
         },
         "required": ["content", "source_ids", "sources", "pattern_type", "confidence"],
         "additionalProperties": False,
@@ -335,6 +361,16 @@ class ObservationsCreatedResult:
     failed: list[ObservationFailure]
 
 
+@dataclass(frozen=True)
+class TemporalEvidence:
+    """Temporal facts inherited from a source document."""
+
+    observed_at: datetime
+    occurred_at: datetime | None
+    temporal_kind: TemporalKind
+    temporal_confidence: TemporalConfidence
+
+
 def _effective_document_created_at(doc: models.Document) -> datetime:
     """Return a document's source/event timestamp, falling back to insertion time."""
     message_created_at = doc.internal_metadata.get("message_created_at")
@@ -348,12 +384,156 @@ def _effective_document_created_at(doc: models.Document) -> datetime:
     return doc.created_at
 
 
+def _effective_document_observed_at(doc: models.Document) -> datetime:
+    if doc.observed_at is not None:
+        return doc.observed_at
+    return _effective_document_created_at(doc)
+
+
 def _safe_parse_observation_created_at(value: str) -> datetime | None:
     try:
         return parse_datetime_iso(value)
     except ValueError:
         logger.warning("Invalid observation created_at fallback timestamp: %s", value)
         return None
+
+
+def _is_system_context_message(message: models.Message) -> bool:
+    metadata = getattr(message, "h_metadata", None)
+    return isinstance(metadata, dict) and bool(metadata.get("system_trigger"))
+
+
+def _safe_parse_occurred_at(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+_ABSOLUTE_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b")
+_RELATIVE_DAY_OFFSETS = {
+    "今天": 0,
+    "昨日": -1,
+    "昨天": -1,
+    "前天": -2,
+    "明天": 1,
+    "today": 0,
+    "yesterday": -1,
+    "tomorrow": 1,
+}
+
+
+def _same_calendar_day(left: datetime, right: datetime) -> bool:
+    return left.date() == right.date()
+
+
+def _validated_occurred_at(
+    occurred_at: datetime,
+    *,
+    observed_at: datetime | None,
+    temporal_evidence: str | None,
+) -> tuple[datetime, TemporalConfidence] | None:
+    if not temporal_evidence:
+        return None
+
+    absolute_match = _ABSOLUTE_DATE_RE.search(temporal_evidence)
+    if absolute_match:
+        year, month, day = (int(part) for part in absolute_match.groups())
+        evidence_date = datetime(year, month, day, tzinfo=occurred_at.tzinfo)
+        return (
+            (occurred_at, "explicit")
+            if _same_calendar_day(occurred_at, evidence_date)
+            else None
+        )
+
+    if observed_at is None:
+        return None
+
+    evidence = temporal_evidence.lower()
+    for phrase, offset in _RELATIVE_DAY_OFFSETS.items():
+        if phrase in evidence:
+            expected = observed_at + timedelta(days=offset)
+            return (
+                (occurred_at, "inferred")
+                if _same_calendar_day(occurred_at, expected)
+                else None
+            )
+
+    return None
+
+
+def _temporal_kind_for_observation(obs: schemas.ObservationInput) -> TemporalKind:
+    if obs.level == "inductive":
+        return "pattern"
+    if obs.level == "contradiction":
+        return "contradiction"
+    if obs.temporal_kind != "unknown":
+        return obs.temporal_kind
+    return "observation"
+
+
+def _explicit_temporal_fields(
+    obs: schemas.ObservationInput,
+    *,
+    observed_at: datetime | None,
+    has_source_messages: bool,
+) -> tuple[datetime | None, TemporalKind, TemporalConfidence]:
+    inherited_confidence: TemporalConfidence
+    if has_source_messages:
+        inherited_confidence = "explicit"
+    elif observed_at is not None:
+        inherited_confidence = "fallback"
+    else:
+        inherited_confidence = "none"
+    occurred_at = _safe_parse_occurred_at(obs.occurred_at)
+    if occurred_at is None:
+        return None, _temporal_kind_for_observation(obs), inherited_confidence
+
+    validated_occurred_at = _validated_occurred_at(
+        occurred_at,
+        observed_at=observed_at,
+        temporal_evidence=obs.temporal_evidence,
+    )
+    if validated_occurred_at is not None:
+        occurred_at_value, confidence = validated_occurred_at
+        return occurred_at_value, "event", confidence
+    return None, _temporal_kind_for_observation(obs), inherited_confidence
+
+
+def _derived_temporal_fields(
+    obs: schemas.ObservationInput,
+    source_temporal: list[TemporalEvidence],
+    fallback_created_at: datetime | None,
+) -> dict[str, Any]:
+    source_observed_ats = [source.observed_at for source in source_temporal]
+    evidence_from = min(source_observed_ats) if source_observed_ats else None
+    evidence_to = max(source_observed_ats) if source_observed_ats else None
+    observed_at = evidence_to or fallback_created_at
+    occurred_candidates = [
+        source.occurred_at for source in source_temporal if source.occurred_at is not None
+    ]
+    occurred_at: datetime | None = None
+    if (
+        occurred_candidates
+        and len({dt for dt in occurred_candidates}) == 1
+        and obs.level == "deductive"
+        and obs.temporal_kind == "event"
+    ):
+        occurred_at = occurred_candidates[0]
+
+    confidence: TemporalConfidence = (
+        "source_inherited" if source_temporal else "fallback"
+    )
+    return {
+        "created_at": observed_at,
+        "observed_at": observed_at,
+        "occurred_at": occurred_at,
+        "temporal_kind": _temporal_kind_for_observation(obs),
+        "temporal_confidence": confidence if observed_at is not None else "none",
+        "evidence_observed_from": evidence_from,
+        "evidence_observed_to": evidence_to,
+    }
 
 
 def _truncate_tool_output(output: str, max_chars: int | None = None) -> str:
@@ -376,6 +556,28 @@ def _truncate_message_content(content: str, max_chars: int | None = None) -> str
     if len(content) <= max_chars:
         return content
     return content[:max_chars] + "..."
+
+
+def _format_dt_for_tool(value: datetime | None) -> str:
+    return format_datetime_utc(value) if value is not None else "未确定"
+
+
+def _format_document_temporal_for_tool(doc: models.Document) -> str:
+    observed_at = doc.observed_at or _effective_document_created_at(doc)
+    parts = [
+        f"观察时间: {_format_dt_for_tool(observed_at)}",
+        f"发生时间: {_format_dt_for_tool(doc.occurred_at)}",
+    ]
+    if doc.evidence_observed_from is not None or doc.evidence_observed_to is not None:
+        parts.append(
+            "证据观察范围: "
+            + f"{_format_dt_for_tool(doc.evidence_observed_from)} 至 "
+            + f"{_format_dt_for_tool(doc.evidence_observed_to)}"
+        )
+        parts.append(f"来源数量: {len(doc.source_ids or [])}")
+    parts.append(f"时间类型: {doc.temporal_kind or 'unknown'}")
+    parts.append(f"时间置信度: {doc.temporal_confidence or 'none'}")
+    return " | ".join(parts)
 
 
 def _extract_pattern_snippet(
@@ -868,7 +1070,7 @@ async def create_observations(
         )
 
     fallback_created_at = _safe_parse_observation_created_at(message_created_at)
-    source_created_at_by_id: dict[str, datetime] = {}
+    source_temporal_by_id: dict[str, TemporalEvidence] = {}
     source_ids_to_fetch = sorted(
         {
             source_id
@@ -882,8 +1084,14 @@ async def create_observations(
             source_docs = await crud.get_documents_by_ids(
                 db, workspace_name, source_ids_to_fetch
             )
-            source_created_at_by_id = {
-                doc.id: _effective_document_created_at(doc) for doc in source_docs
+            source_temporal_by_id = {
+                doc.id: TemporalEvidence(
+                    observed_at=_effective_document_observed_at(doc),
+                    occurred_at=doc.occurred_at,
+                    temporal_kind=doc.temporal_kind or "unknown",
+                    temporal_confidence=doc.temporal_confidence or "none",
+                )
+                for doc in source_docs
             }
 
     # Phase 2: Compute embeddings (no DB needed)
@@ -924,17 +1132,33 @@ async def create_observations(
                 )
                 continue
 
-        source_created_ats = [
-            source_created_at_by_id[source_id]
+        source_temporal = [
+            source_temporal_by_id[source_id]
             for source_id in (obs.source_ids or [])
-            if source_id in source_created_at_by_id
+            if source_id in source_temporal_by_id
         ]
-        created_at = (
-            max(source_created_ats)
-            if source_created_ats
-            and obs.level in ("deductive", "inductive", "contradiction")
-            else fallback_created_at
-        )
+        if obs.level in ("deductive", "inductive", "contradiction"):
+            temporal_fields = _derived_temporal_fields(
+                obs,
+                source_temporal,
+                fallback_created_at,
+            )
+        else:
+            occurred_at, temporal_kind, temporal_confidence = _explicit_temporal_fields(
+                obs,
+                observed_at=fallback_created_at,
+                has_source_messages=bool(message_ids),
+            )
+            temporal_fields = {
+                "created_at": fallback_created_at,
+                "observed_at": fallback_created_at,
+                "occurred_at": occurred_at,
+                "temporal_kind": temporal_kind,
+                "temporal_confidence": temporal_confidence,
+                "evidence_observed_from": None,
+                "evidence_observed_to": None,
+            }
+        created_at = temporal_fields["created_at"]
         effective_message_created_at = (
             format_datetime_utc(created_at)
             if created_at is not None
@@ -968,6 +1192,12 @@ async def create_observations(
             source_ids=obs.source_ids
             if obs.level in ("deductive", "inductive", "contradiction")
             else None,
+            observed_at=temporal_fields["observed_at"],
+            occurred_at=temporal_fields["occurred_at"],
+            temporal_kind=temporal_fields["temporal_kind"],
+            temporal_confidence=temporal_fields["temporal_confidence"],
+            evidence_observed_from=temporal_fields["evidence_observed_from"],
+            evidence_observed_to=temporal_fields["evidence_observed_to"],
         )
         documents.append(doc)
 
@@ -1336,8 +1566,15 @@ async def _handle_create_observations_impl(
 
     # Determine message context
     if ctx.current_messages:
-        message_ids = [msg.id for msg in ctx.current_messages]
-        message_created_at = str(max(msg.created_at for msg in ctx.current_messages))
+        source_messages = [
+            msg for msg in ctx.current_messages if not _is_system_context_message(msg)
+        ]
+        message_ids = [msg.id for msg in source_messages]
+        message_created_at = (
+            str(max(msg.created_at for msg in source_messages))
+            if source_messages
+            else utc_now_iso()
+        )
     else:
         message_ids = []
         message_created_at = utc_now_iso()
@@ -2029,7 +2266,10 @@ async def _handle_get_reasoning_chain(
 
         # Format the main observation
         level = doc.level or "explicit"
-        output_parts.append(f"**Observation [id:{doc.id}] ({level}):**\n{doc.content}")
+        output_parts.append(
+            f"**Observation [id:{doc.id}] ({level}):**\n"
+            f"{doc.content}\n{_format_document_temporal_for_tool(doc)}"
+        )
 
         # Get premises/sources if requested
         if direction in ("premises", "both"):
@@ -2042,7 +2282,8 @@ async def _handle_get_reasoning_chain(
                     for p in premises:
                         p_level = p.level or "explicit"
                         premise_lines.append(
-                            f"  - [id:{p.id}] ({p_level}): {p.content}"
+                            f"  - [id:{p.id}] ({p_level}): {p.content}\n"
+                            f"    {_format_document_temporal_for_tool(p)}"
                         )
                     output_parts.append(
                         f"\n**Premises ({len(premises)}):**\n"
@@ -2060,7 +2301,10 @@ async def _handle_get_reasoning_chain(
                     source_lines: list[Any] = []
                     for s in sources:
                         s_level = s.level or "explicit"
-                        source_lines.append(f"  - [id:{s.id}] ({s_level}): {s.content}")
+                        source_lines.append(
+                            f"  - [id:{s.id}] ({s_level}): {s.content}\n"
+                            f"    {_format_document_temporal_for_tool(s)}"
+                        )
                     output_parts.append(
                         f"\n**Sources ({len(sources)}):**\n" + "\n".join(source_lines)
                     )
@@ -2088,7 +2332,10 @@ async def _handle_get_reasoning_chain(
                 child_lines: list[Any] = []
                 for c in children:
                     c_level = c.level or "explicit"
-                    child_lines.append(f"  - [id:{c.id}] ({c_level}): {c.content}")
+                    child_lines.append(
+                        f"  - [id:{c.id}] ({c_level}): {c.content}\n"
+                        f"    {_format_document_temporal_for_tool(c)}"
+                    )
                 output_parts.append(
                     f"\n**Derived Conclusions ({len(children)}):**\n"
                     + "\n".join(child_lines)

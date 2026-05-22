@@ -27,6 +27,13 @@ from .prompts import estimate_deriver_prompt_tokens, minimal_deriver_prompt
 logger = logging.getLogger(__name__)
 
 
+def _is_deriver_system_message(message: Message) -> bool:
+    """Return whether a message is an internal deriver trigger, not user evidence."""
+
+    metadata = getattr(message, "h_metadata", None)
+    return isinstance(metadata, dict) and bool(metadata.get("system_trigger"))
+
+
 def _get_deriver_model_config() -> ConfiguredModelSettings:
     return settings.DERIVER.MODEL_CONFIG
 
@@ -79,6 +86,11 @@ async def process_representation_tasks_batch(
         return
 
     custom_instructions = message_level_configuration.reasoning.custom_instructions
+    source_messages = [
+        message for message in messages if not _is_deriver_system_message(message)
+    ]
+    if not source_messages:
+        return
 
     accumulate_metric(
         f"minimal_deriver_{latest_message.id}_{observed}",
@@ -96,14 +108,16 @@ async def process_representation_tasks_batch(
     # Format messages with timestamps
     formatted_messages = "\n".join(
         format_new_turn_with_timestamp(msg.content, msg.created_at, msg.peer_name)
-        for msg in messages
+        for msg in source_messages
     )
 
     # Track token usage - count only tokens from messages being processed
     prompt_tokens = estimate_deriver_prompt_tokens(custom_instructions)
     queue_item_message_ids_set = set(queue_item_message_ids)
     messages_tokens = sum(
-        msg.token_count for msg in messages if msg.id in queue_item_message_ids_set
+        msg.token_count
+        for msg in source_messages
+        if msg.id in queue_item_message_ids_set
     )
     track_deriver_input_tokens(
         task_type=DeriverTaskTypes.INGESTION,
@@ -165,17 +179,21 @@ async def process_representation_tasks_batch(
             component=DeriverComponents.OUTPUT_TOTAL.value,
         )
 
-    message_ids = [m.id for m in messages if m.peer_name == observed]
+    observed_messages = [m for m in source_messages if m.peer_name == observed]
+    message_ids = [m.id for m in observed_messages]
     message_created_at_by_id = {
-        m.id: m.created_at for m in messages if m.peer_name == observed
+        m.id: m.created_at for m in observed_messages
     }
+    latest_observed_message_created_at = (
+        max((m.created_at for m in observed_messages), default=latest_message.created_at)
+    )
 
     # Convert to Representation and save
     observations = Representation.from_prompt_representation(
         response.content,
         message_ids,
         latest_message.session_name,
-        latest_message.created_at,
+        latest_observed_message_created_at,
     )
 
     if observations.is_empty() or not message_ids:
@@ -200,7 +218,7 @@ async def process_representation_tasks_batch(
                     observations,
                     message_ids,
                     latest_message.session_name,
-                    latest_message.created_at,
+                    latest_observed_message_created_at,
                     message_level_configuration,
                     message_created_at_by_id,
                 )

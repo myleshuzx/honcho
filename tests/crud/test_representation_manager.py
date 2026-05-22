@@ -205,10 +205,60 @@ class TestRepresentationManagerSave:
         created_docs = mock_create_documents.await_args.args[1]
         assert len(created_docs) == 1
         assert created_docs[0].created_at == new_time
+        assert created_docs[0].observed_at == new_time
+        assert created_docs[0].temporal_kind == "observation"
+        assert created_docs[0].temporal_confidence == "explicit"
         assert created_docs[0].metadata.message_ids == [10, 11]
         assert (
             created_docs[0].metadata.message_created_at == "2024-05-03T12:00:00Z"
         )
+
+    @pytest.mark.asyncio
+    async def test_save_representation_internal_ignores_non_event_occurred_at(self):
+        manager = RepresentationManager(
+            "workspace",
+            observer="observer",
+            observed="observed",
+        )
+        message_time = datetime(2018, 8, 31, tzinfo=timezone.utc)
+        observations = [
+            ExplicitObservation(
+                content="diary_author has an early sleep habit",
+                created_at=message_time,
+                message_ids=[119],
+                session_name="diary-2018-08",
+                temporal_kind="preference",
+                occurred_at=message_time,
+                temporal_evidence="today",
+            )
+        ]
+
+        with (
+            patch(
+                "src.crud.representation.crud.get_or_create_collection",
+                new=AsyncMock(return_value=SimpleNamespace(internal_metadata={})),
+            ),
+            patch(
+                "src.crud.representation.crud.create_documents",
+                new=AsyncMock(return_value=[]),
+            ) as mock_create_documents,
+        ):
+            await manager._save_representation_internal(
+                object(),  # pyright: ignore[reportArgumentType]
+                observations,
+                [[0.1]],
+                [119],
+                "diary-2018-08",
+                message_time,
+                SimpleNamespace(dream=SimpleNamespace(enabled=False)),  # pyright: ignore[reportArgumentType]
+                {119: message_time},
+            )
+
+        created_docs = mock_create_documents.await_args.args[1]
+        assert len(created_docs) == 1
+        assert created_docs[0].occurred_at is None
+        assert created_docs[0].temporal_kind == "preference"
+        assert created_docs[0].temporal_confidence == "explicit"
 
     @pytest.mark.asyncio
     async def test_save_representation_filters_blank_observations_before_embedding(

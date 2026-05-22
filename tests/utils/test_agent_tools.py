@@ -264,6 +264,9 @@ class TestCreateObservations:
             session_name=session.name,
             level="explicit",
             created_at=insertion_time,
+            observed_at=older_event,
+            temporal_kind="observation",
+            temporal_confidence="explicit",
             internal_metadata={
                 "message_ids": [1],
                 "message_created_at": older_event.isoformat(),
@@ -277,6 +280,9 @@ class TestCreateObservations:
             session_name=session.name,
             level="explicit",
             created_at=insertion_time,
+            observed_at=newer_event,
+            temporal_kind="observation",
+            temporal_confidence="explicit",
             internal_metadata={
                 "message_ids": [2],
                 "message_created_at": newer_event.isoformat(),
@@ -311,7 +317,97 @@ class TestCreateObservations:
         doc = (await db_session.execute(stmt)).scalar_one()
         assert doc.level == "deductive"
         assert doc.created_at == newer_event
+        assert doc.observed_at == newer_event
+        assert doc.evidence_observed_from == older_event
+        assert doc.evidence_observed_to == newer_event
+        assert doc.temporal_kind == "observation"
+        assert doc.temporal_confidence == "source_inherited"
         assert doc.internal_metadata["message_created_at"] == "2003-03-03T12:00:00Z"
+
+    async def test_inductive_temporal_range_uses_source_observed_times(
+        self,
+        db_session: AsyncSession,
+        tool_test_data: Any,
+        make_tool_context: Callable[..., ToolContext],
+    ):
+        """Inductive observations store a source evidence observation range."""
+        workspace, peer1, peer2, session, _messages, _ = tool_test_data
+        first_seen = datetime(2024, 3, 1, 9, 0, tzinfo=timezone.utc)
+        last_seen = datetime(2024, 4, 12, 9, 0, tzinfo=timezone.utc)
+
+        sources = [
+            models.Document(
+                workspace_name=workspace.name,
+                observer=peer1.name,
+                observed=peer2.name,
+                content="Source one",
+                session_name=session.name,
+                level="explicit",
+                created_at=first_seen,
+                observed_at=first_seen,
+                temporal_kind="observation",
+                temporal_confidence="explicit",
+                internal_metadata={
+                    "message_ids": [1],
+                    "message_created_at": first_seen.isoformat(),
+                },
+            ),
+            models.Document(
+                workspace_name=workspace.name,
+                observer=peer1.name,
+                observed=peer2.name,
+                content="Source two",
+                session_name=session.name,
+                level="explicit",
+                created_at=last_seen,
+                observed_at=last_seen,
+                temporal_kind="observation",
+                temporal_confidence="explicit",
+                internal_metadata={
+                    "message_ids": [2],
+                    "message_created_at": last_seen.isoformat(),
+                },
+            ),
+        ]
+        db_session.add_all(sources)
+        await db_session.flush()
+        source_ids = [source.id for source in sources]
+        await db_session.commit()
+
+        ctx = make_tool_context(current_messages=None)
+        result = await _handle_create_observations(
+            ctx,
+            {
+                "observations": [
+                    {
+                        "content": "User shows a recurring planning pattern",
+                        "level": "inductive",
+                        "source_ids": source_ids,
+                        "sources": ["Source one", "Source two"],
+                        "pattern_type": "behavior",
+                        "confidence": "low",
+                    },
+                ]
+            },
+        )
+
+        assert "Created 1 observations" in result
+        doc = (
+            await db_session.execute(
+                select(models.Document).where(
+                    models.Document.content
+                    == "User shows a recurring planning pattern"
+                )
+            )
+        ).scalar_one()
+        assert doc.level == "inductive"
+        assert doc.temporal_kind == "pattern"
+        assert doc.temporal_confidence == "source_inherited"
+        assert doc.observed_at == last_seen
+        assert doc.created_at == last_seen
+        assert doc.evidence_observed_from == first_seen
+        assert doc.evidence_observed_to == last_seen
+        assert doc.occurred_at is None
 
     async def test_empty_observations_list_returns_error(
         self, make_tool_context: Callable[..., ToolContext]

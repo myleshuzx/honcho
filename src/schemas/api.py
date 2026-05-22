@@ -285,6 +285,7 @@ class Message(MessageBase):
         default_factory=dict, serialization_alias="metadata"
     )
     created_at: datetime.datetime
+    ingested_at: datetime.datetime
     workspace_name: str = Field(serialization_alias="workspace_id")
     token_count: int
 

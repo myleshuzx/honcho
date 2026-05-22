@@ -54,10 +54,46 @@ class ObservationMetadata(BaseModel):
     created_at: datetime
     message_ids: list[int]
     session_name: str | None = None
+    generated_at: datetime | None = None
+    observed_at: datetime | None = None
+    occurred_at: datetime | None = None
+    temporal_kind: str = "unknown"
+    temporal_confidence: str = "none"
+    evidence_observed_from: datetime | None = None
+    evidence_observed_to: datetime | None = None
+
+
+def _format_temporal_details(obs: ObservationMetadata) -> str:
+    observed_at = obs.observed_at or obs.created_at
+    details = [f"观察时间: {_strip_microseconds_and_timezone(observed_at)}"]
+    if obs.occurred_at is not None:
+        details.append(f"发生时间: {_strip_microseconds_and_timezone(obs.occurred_at)}")
+    else:
+        details.append("发生时间: 未确定")
+    if obs.evidence_observed_from is not None or obs.evidence_observed_to is not None:
+        start = (
+            _strip_microseconds_and_timezone(obs.evidence_observed_from)
+            if obs.evidence_observed_from is not None
+            else "未知"
+        )
+        end = (
+            _strip_microseconds_and_timezone(obs.evidence_observed_to)
+            if obs.evidence_observed_to is not None
+            else "未知"
+        )
+        details.append(f"证据观察范围: {start} 至 {end}")
+    if obs.temporal_kind != "unknown" or obs.temporal_confidence != "none":
+        details.append(
+            f"时间类型: {obs.temporal_kind}; 时间置信度: {obs.temporal_confidence}"
+        )
+    return " | ".join(details)
 
 
 class ExplicitObservationBase(BaseModel):
     content: str = Field(description="The explicit observation")
+    temporal_kind: str = Field(default="unknown")
+    occurred_at: datetime | None = None
+    temporal_evidence: str | None = None
 
 
 class DeductiveObservationBase(BaseModel):
@@ -131,12 +167,12 @@ class ExplicitObservation(ExplicitObservationBase, ObservationMetadata):
     """Explicit observation with content and metadata."""
 
     def __str__(self) -> str:
-        return f"[{_strip_microseconds_and_timezone(self.created_at)}] {self.content}"
+        return f"[{_strip_microseconds_and_timezone(self.created_at)}] {self.content}\n    {_format_temporal_details(self)}"
 
     def str_with_id(self) -> str:
         """Format with ID prefix for use by agents that need to reference observations."""
         id_prefix = f"[id:{self.id}] " if self.id else ""
-        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] {self.content}"
+        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] {self.content}\n    {_format_temporal_details(self)}"
 
     def __hash__(self) -> int:
         """
@@ -163,13 +199,13 @@ class DeductiveObservation(DeductiveObservationBase, ObservationMetadata):
 
     def __str__(self) -> str:
         premises_text = "\n".join(f"    - {premise}" for premise in self.premises)
-        return f"[{_strip_microseconds_and_timezone(self.created_at)}] {self.conclusion}\n{premises_text}"
+        return f"[{_strip_microseconds_and_timezone(self.created_at)}] {self.conclusion}\n    {_format_temporal_details(self)}\n{premises_text}"
 
     def str_with_id(self) -> str:
         """Format with ID prefix for use by agents that need to reference observations."""
         id_prefix = f"[id:{self.id}] " if self.id else ""
         premises_text = "\n".join(f"    - {premise}" for premise in self.premises)
-        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] {self.conclusion}\n{premises_text}"
+        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] {self.conclusion}\n    {_format_temporal_details(self)}\n{premises_text}"
 
     def str_no_timestamps(self) -> str:
         premises_text = "\n".join(f"    - {premise}" for premise in self.premises)
@@ -203,7 +239,7 @@ class InductiveObservation(InductiveObservationBase, ObservationMetadata):
         if self.sources:
             source_lines = [f"    - {source}" for source in self.sources]
             sources_text = "\n" + "\n".join(source_lines)
-        return f"[{_strip_microseconds_and_timezone(self.created_at)}] [{self.confidence}] {self.conclusion}{sources_text}"
+        return f"[{_strip_microseconds_and_timezone(self.created_at)}] [{self.confidence}] {self.conclusion}\n    {_format_temporal_details(self)}{sources_text}"
 
     def str_with_id(self) -> str:
         """Format with ID prefix for use by agents that need to reference observations."""
@@ -212,7 +248,7 @@ class InductiveObservation(InductiveObservationBase, ObservationMetadata):
         if self.sources:
             source_lines = [f"    - {source}" for source in self.sources]
             sources_text = "\n" + "\n".join(source_lines)
-        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] [{self.confidence}] {self.conclusion}{sources_text}"
+        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] [{self.confidence}] {self.conclusion}\n    {_format_temporal_details(self)}{sources_text}"
 
     def str_no_timestamps(self) -> str:
         sources_text = ""
@@ -244,7 +280,7 @@ class ContradictionObservation(ContradictionObservationBase, ObservationMetadata
         if self.sources:
             source_lines = [f"    - {source}" for source in self.sources]
             sources_text = "\n" + "\n".join(source_lines)
-        return f"[{_strip_microseconds_and_timezone(self.created_at)}] CONTRADICTION: {self.content}{sources_text}"
+        return f"[{_strip_microseconds_and_timezone(self.created_at)}] CONTRADICTION: {self.content}\n    {_format_temporal_details(self)}{sources_text}"
 
     def str_with_id(self) -> str:
         """Format with ID prefix for use by agents that need to reference observations."""
@@ -253,7 +289,7 @@ class ContradictionObservation(ContradictionObservationBase, ObservationMetadata
         if self.sources:
             source_lines = [f"    - {source}" for source in self.sources]
             sources_text = "\n" + "\n".join(source_lines)
-        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] CONTRADICTION: {self.content}{sources_text}"
+        return f"{id_prefix}[{_strip_microseconds_and_timezone(self.created_at)}] CONTRADICTION: {self.content}\n    {_format_temporal_details(self)}{sources_text}"
 
     def str_no_timestamps(self) -> str:
         sources_text = ""
@@ -588,6 +624,13 @@ class Representation(BaseModel):
                     created_at=_safe_datetime_from_metadata(
                         doc.internal_metadata, doc.created_at
                     ),
+                    generated_at=doc.generated_at,
+                    observed_at=doc.observed_at,
+                    occurred_at=doc.occurred_at,
+                    temporal_kind=doc.temporal_kind,
+                    temporal_confidence=doc.temporal_confidence,
+                    evidence_observed_from=doc.evidence_observed_from,
+                    evidence_observed_to=doc.evidence_observed_to,
                     content=doc.content,
                     message_ids=flatten_message_ids(
                         doc.internal_metadata.get("message_ids", [])
@@ -603,6 +646,13 @@ class Representation(BaseModel):
                     created_at=_safe_datetime_from_metadata(
                         doc.internal_metadata, doc.created_at
                     ),
+                    generated_at=doc.generated_at,
+                    observed_at=doc.observed_at,
+                    occurred_at=doc.occurred_at,
+                    temporal_kind=doc.temporal_kind,
+                    temporal_confidence=doc.temporal_confidence,
+                    evidence_observed_from=doc.evidence_observed_from,
+                    evidence_observed_to=doc.evidence_observed_to,
                     conclusion=doc.content,
                     message_ids=flatten_message_ids(
                         doc.internal_metadata.get("message_ids", [])
@@ -622,6 +672,13 @@ class Representation(BaseModel):
                     created_at=_safe_datetime_from_metadata(
                         doc.internal_metadata, doc.created_at
                     ),
+                    generated_at=doc.generated_at,
+                    observed_at=doc.observed_at,
+                    occurred_at=doc.occurred_at,
+                    temporal_kind=doc.temporal_kind,
+                    temporal_confidence=doc.temporal_confidence,
+                    evidence_observed_from=doc.evidence_observed_from,
+                    evidence_observed_to=doc.evidence_observed_to,
                     conclusion=doc.content,
                     message_ids=doc.internal_metadata.get("message_ids", []),
                     session_name=doc.session_name,
@@ -641,6 +698,13 @@ class Representation(BaseModel):
                     created_at=_safe_datetime_from_metadata(
                         doc.internal_metadata, doc.created_at
                     ),
+                    generated_at=doc.generated_at,
+                    observed_at=doc.observed_at,
+                    occurred_at=doc.occurred_at,
+                    temporal_kind=doc.temporal_kind,
+                    temporal_confidence=doc.temporal_confidence,
+                    evidence_observed_from=doc.evidence_observed_from,
+                    evidence_observed_to=doc.evidence_observed_to,
                     content=doc.content,
                     message_ids=doc.internal_metadata.get("message_ids", []),
                     session_name=doc.session_name,
@@ -664,12 +728,15 @@ class Representation(BaseModel):
     ) -> "Representation":
         """Convert PromptRepresentation to Representation."""
         explicit = [
-            ExplicitObservation(
-                content=content,
-                created_at=created_at,
-                message_ids=message_ids,
-                session_name=session_name,
-            )
+                ExplicitObservation(
+                    content=content,
+                    created_at=created_at,
+                    message_ids=message_ids,
+                    session_name=session_name,
+                    temporal_kind=e.temporal_kind,
+                    occurred_at=e.occurred_at,
+                    temporal_evidence=e.temporal_evidence,
+                )
             for e in prompt_representation.explicit
             if (content := strip_internal_reasoning(e.content).strip())
         ]

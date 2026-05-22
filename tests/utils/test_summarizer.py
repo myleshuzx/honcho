@@ -6,6 +6,8 @@ normal LLM responses, ensuring fallback logic prevents empty summaries
 from being persisted.
 """
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -16,6 +18,7 @@ from src.utils.summarizer import (
     Summary,
     SummaryType,
     _create_summary,  # pyright: ignore[reportPrivateUsage]
+    _format_messages,  # pyright: ignore[reportPrivateUsage]
     create_long_summary,
     create_short_summary,
 )
@@ -27,6 +30,20 @@ _MESSAGE_PUBLIC_ID = "msg_abc123"
 _LAST_MESSAGE_ID = 42
 _LAST_MESSAGE_CONTENT_PREVIEW = "hello there how are you"
 _MESSAGE_COUNT = 5
+
+
+def test_format_messages_includes_message_created_at():
+    messages = [
+        SimpleNamespace(
+            peer_name="diary_author",
+            content="今天整理了八月日记。",
+            created_at=datetime(2018, 8, 31, 0, 0, tzinfo=timezone.utc),
+        )
+    ]
+
+    formatted = _format_messages(messages)
+
+    assert formatted == "2018-08-31 00:00:00 diary_author: 今天整理了八月日记。"
 
 
 async def _call_create_summary(

@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from logging import getLogger
 from typing import Any
 
@@ -259,6 +259,7 @@ async def create_messages(
     message_objects: list[models.Message] = []
     for offset, message in enumerate(messages, start=1):
         message_seq_in_session = last_seq + offset
+        created_at = message.created_at or datetime.now(timezone.utc)
         message_obj = models.Message(
             session_name=session_name,
             peer_name=message.peer_name,
@@ -267,7 +268,7 @@ async def create_messages(
             workspace_name=workspace_name,
             public_id=generate_nanoid(),
             token_count=len(message.encoded_message),
-            created_at=message.created_at,  # Use provided created_at if available
+            created_at=created_at,
             seq_in_session=message_seq_in_session,
         )
         message_objects.append(message_obj)

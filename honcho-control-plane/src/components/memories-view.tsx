@@ -18,11 +18,82 @@ import { JsonPanel } from "./json-panel";
 type Tab = "sessions" | "representation" | "observations" | "summary" | "peer-card";
 type ObservationTab = ObservationLevel;
 
-const levels: ObservationTab[] = ["explicit", "inductive", "deductive", "contradiction"];
+const levels: ObservationTab[] = ["explicit", "deductive", "inductive", "contradiction"];
 const PAGE_SIZE = 500;
 
 function formatDate(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "Unknown";
+}
+
+function formatDateCompact(value?: string | null) {
+  return value ? new Date(value).toLocaleString() : null;
+}
+
+function TemporalDetails({ observation }: { observation: Observation }) {
+  const temporal = observation.temporal;
+  const observedAt = formatDateCompact(temporal?.observed_at ?? observation.source_created_at ?? observation.created_at);
+  const occurredAt = formatDateCompact(temporal?.occurred_at);
+  const generatedAt = formatDateCompact(temporal?.generated_at ?? observation.generated_at);
+  const evidenceFrom = formatDateCompact(temporal?.evidence_observed_from);
+  const evidenceTo = formatDateCompact(temporal?.evidence_observed_to);
+  const kind = temporal?.temporal_kind || "unknown";
+  const confidence = temporal?.temporal_confidence || "none";
+  const sourceCount = temporal?.source_count ?? observation.source_ids.length;
+
+  return (
+    <div className="temporal-stack">
+      {observedAt && (
+        <div>
+          <span>Observed</span>
+          <strong>{observedAt}</strong>
+        </div>
+      )}
+      {occurredAt && (
+        <div>
+          <span>Occurred</span>
+          <strong>{occurredAt}</strong>
+        </div>
+      )}
+      {generatedAt && (
+        <div>
+          <span>Generated</span>
+          <strong>{generatedAt}</strong>
+        </div>
+      )}
+      {(evidenceFrom || evidenceTo) && (
+        <div>
+          <span>Evidence range</span>
+          <strong>
+            {evidenceFrom ?? "Unknown"} - {evidenceTo ?? "Unknown"}
+          </strong>
+        </div>
+      )}
+      <div className="temporal-pills">
+        <span className="pill">{kind}</span>
+        <span className="pill">{confidence}</span>
+        {sourceCount > 0 && <span className="pill">{sourceCount} sources</span>}
+      </div>
+    </div>
+  );
+}
+
+function SourceMessageTimeDetails({ message }: { message: SourceMessage }) {
+  return (
+    <div className="temporal-stack">
+      {message.created_at && (
+        <div>
+          <span>Observed</span>
+          <strong>{formatDate(message.created_at)}</strong>
+        </div>
+      )}
+      {message.ingested_at && (
+        <div>
+          <span>Ingested</span>
+          <strong>{formatDate(message.ingested_at)}</strong>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ObservationTable({ observations }: { observations: Observation[] }) {
@@ -39,8 +110,7 @@ function ObservationTable({ observations }: { observations: Observation[] }) {
             <th>Pair</th>
             <th>Session</th>
             <th>Derived</th>
-            <th>Created</th>
-            <th>Source time</th>
+            <th>Time</th>
           </tr>
         </thead>
         <tbody>
@@ -58,8 +128,7 @@ function ObservationTable({ observations }: { observations: Observation[] }) {
               <td>{observation.observer} &rarr; {observation.observed}</td>
               <td>{observation.session_id ?? "global"}</td>
               <td>{observation.times_derived}</td>
-              <td>{formatDate(observation.created_at)}</td>
-              <td>{formatDate(observation.source_created_at)}</td>
+              <td><TemporalDetails observation={observation} /></td>
             </tr>
           ))}
         </tbody>
@@ -91,8 +160,7 @@ function DerivedObservationTable({
             <th>{level === "deductive" ? "Deduction" : "Induction"}</th>
             <th>Sources</th>
             <th>Session</th>
-            <th>Created</th>
-            <th>Source time</th>
+            <th>Time</th>
           </tr>
         </thead>
         <tbody>
@@ -111,8 +179,7 @@ function DerivedObservationTable({
               </td>
               <td>{observation.source_ids.length}</td>
               <td>{observation.session_id ?? "global"}</td>
-              <td>{formatDate(observation.created_at)}</td>
-              <td>{formatDate(observation.source_created_at)}</td>
+              <td><TemporalDetails observation={observation} /></td>
             </tr>
           ))}
         </tbody>
@@ -146,62 +213,44 @@ function DerivationDetail({
       sourceId
     }))
   );
+  const dedupedMessageRows = Array.from(
+    messageRows.reduce((acc, message) => {
+      const existing = acc.get(message.internal_id);
+      if (existing) {
+        existing.sourceIds.push(message.sourceId);
+      } else {
+        acc.set(message.internal_id, { ...message, sourceIds: [message.sourceId] });
+      }
+      return acc;
+    }, new Map<number, SourceMessage & { sourceId: string; sourceIds: string[] }>())
+  ).map(([, message]) => message);
 
   return (
     <div className="card">
       <div className="card-header">
         <h2 className="card-title">{title}</h2>
         <p className="card-subtitle">
-          Created {formatDate(observation.created_at)} - source time {formatDate(observation.source_created_at)}
+          Observed {formatDate(observation.temporal?.observed_at ?? observation.source_created_at ?? observation.created_at)}
         </p>
       </div>
       <div className="card-body">
         <div style={{ marginBottom: 16, lineHeight: 1.6 }}>{observation.content}</div>
+        <div style={{ marginBottom: 16 }}>
+          <TemporalDetails observation={observation} />
+        </div>
         {sourceRows.length === 0 ? (
           <div className="muted">
             This {label} references {observation.source_ids.length} source id(s), but none are loaded in the current response.
           </div>
         ) : (
           <div className="grid">
-            {messageRows.length > 0 ? (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Message</th>
-                      <th>Peer</th>
-                      <th>Session</th>
-                      <th>Message time</th>
-                      <th>Source observation</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {messageRows.map((message) => (
-                      <tr key={`${message.sourceId}-${message.internal_id}`}>
-                        <td>
-                          <div>{message.content}</div>
-                          <div className="code" style={{ marginTop: 6, display: "inline-block" }}>{message.id}</div>
-                        </td>
-                        <td>{message.peer_id}</td>
-                        <td>{message.session_id}</td>
-                        <td>{formatDate(message.created_at)}</td>
-                        <td><span className="code">{message.sourceId}</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="muted">No source messages are linked to these source observations.</div>
-            )}
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Source observation</th>
+                    <th>Source observation ({sourceRows.length})</th>
                     <th>Level</th>
-                    <th>Created</th>
-                    <th>Source time</th>
+                    <th>Time</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -212,13 +261,47 @@ function DerivationDetail({
                         <div className="code" style={{ marginTop: 6, display: "inline-block" }}>{source.id}</div>
                       </td>
                       <td><span className={`pill ${source.level}`}>{source.level}</span></td>
-                      <td>{formatDate(source.created_at)}</td>
-                      <td>{formatDate(source.source_created_at)}</td>
+                      <td><TemporalDetails observation={source} /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {dedupedMessageRows.length > 0 ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Underlying message ({dedupedMessageRows.length})</th>
+                      <th>Peer</th>
+                      <th>Session</th>
+                      <th>Time</th>
+                      <th>Linked source observations</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dedupedMessageRows.map((message) => (
+                      <tr key={message.internal_id}>
+                        <td>
+                          <div>{message.content}</div>
+                          <div className="code" style={{ marginTop: 6, display: "inline-block" }}>{message.id}</div>
+                        </td>
+                        <td>{message.peer_id}</td>
+                        <td>{message.session_id}</td>
+                        <td><SourceMessageTimeDetails message={message} /></td>
+                        <td>
+                          {message.sourceIds.map((sourceId) => (
+                            <span className="code" key={sourceId} style={{ marginRight: 6 }}>{sourceId}</span>
+                          ))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="muted">No source messages are linked to these source observations.</div>
+            )}
           </div>
         )}
       </div>
@@ -233,13 +316,18 @@ function Timeline({ observations }: { observations: Observation[] }) {
       <div className="card-body timeline">
         {observations.map((observation) => (
           <div className="timeline-item" key={observation.id}>
-            <div className="muted" style={{ fontSize: 12 }}>{formatDate(observation.created_at)}</div>
-            {observation.source_created_at && observation.source_created_at !== observation.created_at && (
+            <div className="muted" style={{ fontSize: 12 }}>
+              observed {formatDate(observation.temporal?.observed_at ?? observation.source_created_at ?? observation.created_at)}
+            </div>
+            {observation.temporal?.occurred_at && (
               <div className="muted" style={{ fontSize: 12 }}>
-                source {formatDate(observation.source_created_at)}
+                occurred {formatDate(observation.temporal.occurred_at)}
               </div>
             )}
             <div style={{ marginTop: 4 }}>{observation.content}</div>
+            <div style={{ marginTop: 8 }}>
+              <TemporalDetails observation={observation} />
+            </div>
             <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
               {observation.observer} &rarr; {observation.observed}
             </div>

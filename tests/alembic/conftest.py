@@ -24,6 +24,36 @@ ALEMBIC_CONFIG_PATH = Path(__file__).resolve().parents[2] / "alembic.ini"
 ALEMBIC_TEST_DB_URL: URL = CONNECTION_URI.set(database="alembic_migration_tests")
 
 
+def _drop_alembic_database_if_exists() -> None:
+    """Drop the Alembic test database after closing leftover test connections."""
+
+    if not database_exists(ALEMBIC_TEST_DB_URL):
+        return
+
+    maintenance_url = ALEMBIC_TEST_DB_URL.set(database="postgres")
+    maintenance_engine = create_engine(
+        maintenance_url.render_as_string(hide_password=False),
+        isolation_level="AUTOCOMMIT",
+    )
+    try:
+        with maintenance_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = :database
+                      AND pid <> pg_backend_pid()
+                    """
+                ),
+                {"database": ALEMBIC_TEST_DB_URL.database},
+            )
+    finally:
+        maintenance_engine.dispose()
+
+    drop_database(ALEMBIC_TEST_DB_URL)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def configure_alembic_settings(alembic_database: str) -> Generator[None, None, None]:
     """Point application settings at the Alembic test database."""
@@ -63,19 +93,17 @@ def alembic_database() -> Generator[str, None, None]:
         + "expected 'alembic_migration_tests'. "
     )
 
-    if database_exists(ALEMBIC_TEST_DB_URL):
-        drop_database(ALEMBIC_TEST_DB_URL)  # start fresh
+    _drop_alembic_database_if_exists()  # start fresh
     create_database(ALEMBIC_TEST_DB_URL)
 
-    engine = create_engine(str(ALEMBIC_TEST_DB_URL))
+    engine = create_engine(ALEMBIC_TEST_DB_URL.render_as_string(hide_password=False))
     try:
         with engine.begin() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        yield str(ALEMBIC_TEST_DB_URL)
+        yield ALEMBIC_TEST_DB_URL.render_as_string(hide_password=False)
     finally:
         engine.dispose()
-        if database_exists(ALEMBIC_TEST_DB_URL):
-            drop_database(ALEMBIC_TEST_DB_URL)
+        _drop_alembic_database_if_exists()
 
 
 @pytest.fixture

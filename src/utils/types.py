@@ -39,3 +39,19 @@ TaskType = Literal[
 ]
 VectorSyncState = Literal["synced", "pending", "failed"]
 DocumentLevel = Literal["explicit", "deductive", "inductive", "contradiction"]
+TemporalKind = Literal[
+    "event",
+    "observation",
+    "state",
+    "preference",
+    "pattern",
+    "contradiction",
+    "unknown",
+]
+TemporalConfidence = Literal[
+    "explicit",
+    "inferred",
+    "source_inherited",
+    "fallback",
+    "none",
+]

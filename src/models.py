@@ -26,7 +26,13 @@ from sqlalchemy.sql import func
 from typing_extensions import override
 
 from src.config import settings
-from src.utils.types import DocumentLevel, TaskType, VectorSyncState
+from src.utils.types import (
+    DocumentLevel,
+    TaskType,
+    TemporalConfidence,
+    TemporalKind,
+    VectorSyncState,
+)
 
 from .db import Base
 
@@ -229,6 +235,9 @@ class Message(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+    ingested_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
     # Note: Foreign key relationships established via composite ForeignKeyConstraint below
     peer_name: Mapped[str] = mapped_column(TEXT, index=True)
     workspace_name: Mapped[str] = mapped_column(TEXT, index=True)
@@ -395,6 +404,27 @@ class Document(Base):
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    generated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    observed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    occurred_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    evidence_observed_from: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    evidence_observed_to: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    temporal_kind: Mapped[TemporalKind] = mapped_column(
+        TEXT, nullable=False, server_default="unknown", default="unknown"
+    )
+    temporal_confidence: Mapped[TemporalConfidence] = mapped_column(
+        TEXT, nullable=False, server_default="none", default="none"
     )
 
     observer: Mapped[str] = mapped_column(TEXT, index=True)

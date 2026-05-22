@@ -25,7 +25,11 @@ from src.telemetry.prometheus.metrics import (
     DeriverTaskTypes,
     TokenTypes,
 )
-from src.utils.formatting import strip_internal_reasoning, utc_now_iso
+from src.utils.formatting import (
+    format_new_turn_with_timestamp,
+    strip_internal_reasoning,
+    utc_now_iso,
+)
 from src.utils.tokens import estimate_tokens, track_deriver_input_tokens
 
 from .. import crud, models
@@ -127,6 +131,11 @@ def short_summary_prompt(
 {formatted_messages}
 </conversation>
 
+If a conversation line starts with a timestamp, treat that timestamp as the
+message or diary observation time. Use those timestamps as the primary basis for
+chronological ordering and do not claim that dates are missing when timestamps
+are present.
+
 硬性上限：最多 {output_words} 个词。必要时，舍弃较低优先级的细节，以保持在限制以内。
 """)
 
@@ -164,6 +173,11 @@ def long_summary_prompt(
 <conversation>
 {formatted_messages}
 </conversation>
+
+If a conversation line starts with a timestamp, treat that timestamp as the
+message or diary observation time. Use those timestamps as the primary basis for
+chronological ordering and do not claim that dates are missing when timestamps
+are present.
 
 硬性上限：最多 {output_words} 个词。必要时，舍弃较低优先级的细节，以保持在限制以内。
 """)
@@ -919,8 +933,11 @@ async def get_session_context_formatted(
 def _format_messages(messages: list[models.Message]) -> str:
     """
     Format a list of messages into a string by concatenating their content and
-    prefixing each with the peer name.
+    prefixing each with the message timestamp and peer name.
     """
     if len(messages) == 0:
         return ""
-    return "\n".join([f"{msg.peer_name}: {msg.content}" for msg in messages])
+    return "\n".join(
+        format_new_turn_with_timestamp(msg.content, msg.created_at, msg.peer_name)
+        for msg in messages
+    )

@@ -466,6 +466,43 @@ tr:last-child td {
   background: #fee2e2;
 }
 
+.temporal-stack {
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.temporal-stack > div:not(.temporal-pills) {
+  display: grid;
+  gap: 2px;
+}
+
+.temporal-stack span {
+  color: var(--muted-foreground);
+  font-weight: 650;
+}
+
+.temporal-stack strong {
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.temporal-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.temporal-pills .pill {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
 .timeline {
   border-left: 2px solid var(--card-border);
   padding-left: 16px;

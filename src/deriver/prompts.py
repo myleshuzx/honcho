@@ -82,6 +82,14 @@ def minimal_deriver_prompt(
 {messages}
 </messages>
 
+Temporal output rules:
+- If an explicit observation describes an event with clear time evidence, include optional fields: temporal_kind="event", occurred_at as an ISO timestamp/date, and temporal_evidence as the exact source phrase.
+- Resolve relative phrases such as "yesterday", "today", "tomorrow", "昨天", "今天", "明天" against the timestamp printed before the source message.
+- Only write an absolute event date in content when you also provide occurred_at and temporal_evidence for the same observation.
+- If event timing is unclear, remove relative/absolute event dates from content and leave occurred_at absent.
+- For preferences, opinions, states, identity facts, or unclear timing, omit occurred_at and use temporal_kind="preference", "state", "observation", or "unknown".
+- Never invent occurred_at. If unsure, leave it absent.
+
 请只输出 JSON，包含以下字段：
 - explicit: 显式观察列表，每个观察必须是包含 content 字段的对象。
 - deductive: 推论观察列表，当前 deriver 不使用该字段，请返回空数组。

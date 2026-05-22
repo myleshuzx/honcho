@@ -494,6 +494,7 @@ async def create_documents(
                 or not settings.VECTOR_STORE.MIGRATED
             )
 
+            observed_at = doc.observed_at or doc.created_at
             document_values = {
                 "workspace_name": workspace_name,
                 "observer": observer,
@@ -505,9 +506,17 @@ async def create_documents(
                 "session_name": doc.session_name,
                 # Tree linkage column
                 "source_ids": doc.source_ids,
+                "observed_at": observed_at,
+                "occurred_at": doc.occurred_at,
+                "temporal_kind": doc.temporal_kind,
+                "temporal_confidence": doc.temporal_confidence,
+                "evidence_observed_from": doc.evidence_observed_from,
+                "evidence_observed_to": doc.evidence_observed_to,
             }
             if doc.created_at is not None:
                 document_values["created_at"] = doc.created_at
+            if doc.generated_at is not None:
+                document_values["generated_at"] = doc.generated_at
 
             if store_embeddings_in_postgres and doc.embedding:
                 new_doc = models.Document(
@@ -834,6 +843,7 @@ async def create_observations(
     )
 
     for obs, embedding in zip(observations, embeddings, strict=True):
+        observed_at = datetime.datetime.now(datetime.timezone.utc)
         if store_embeddings_in_postgres:
             doc = models.Document(
                 workspace_name=workspace_name,
@@ -845,6 +855,9 @@ async def create_observations(
                 internal_metadata={},  # No message_ids since not derived from messages
                 session_name=obs.session_id,
                 embedding=embedding,
+                observed_at=observed_at,
+                temporal_kind="observation",
+                temporal_confidence="fallback",
             )
         else:
             doc = models.Document(
@@ -856,6 +869,9 @@ async def create_observations(
                 times_derived=1,
                 internal_metadata={},  # No message_ids since not derived from messages
                 session_name=obs.session_id,
+                observed_at=observed_at,
+                temporal_kind="observation",
+                temporal_confidence="fallback",
             )
         doc.sync_state = "pending"
         honcho_documents.append(doc)
