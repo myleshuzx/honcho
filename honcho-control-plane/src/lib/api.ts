@@ -1,5 +1,6 @@
 import type {
   DocumentInfo,
+  DocumentListResponse,
   MemoriesResponse,
   OverviewResponse,
   PeerCardResponse,
@@ -81,9 +82,14 @@ export const api = {
     );
   },
 
-  getDocuments(workspaceId: string) {
-    return fetchJson<{ workspace_id: string; documents: DocumentInfo[] }>(
-      cp(`/workspaces/${encodeURIComponent(workspaceId)}/documents`)
+  getDocuments(workspaceId: string, params: Record<string, string | number | undefined> = {}) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return fetchJson<DocumentListResponse>(
+      cp(`/workspaces/${encodeURIComponent(workspaceId)}/documents${qs ? `?${qs}` : ""}`)
     );
   },
 

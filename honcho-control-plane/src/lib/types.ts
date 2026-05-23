@@ -151,6 +151,18 @@ export type DocumentInfo = {
   updated_at: string | null;
 };
 
+export type DocumentListResponse = {
+  workspace_id: string;
+  documents: DocumentInfo[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+    has_next: boolean;
+    has_previous: boolean;
+  };
+};
+
 export type SessionSummaries = {
   workspace_id: string;
   session_id: string;

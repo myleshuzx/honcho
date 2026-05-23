@@ -651,6 +651,7 @@ async def reflect_workspace_memory(
 async def list_workspace_documents(
     workspace_id: str = Path(...),
     limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = db,
 ) -> dict[str, Any]:
     file_id_expr = func.jsonb_extract_path_text(models.Message.internal_metadata, "file_id")
@@ -668,68 +669,98 @@ async def list_workspace_documents(
         models.Message.internal_metadata, "source_type"
     )
 
-    stmt = (
-        select(
-            file_id_expr.label("file_id"),
-            filename_expr.label("filename"),
-            content_type_expr.label("content_type"),
-            original_size_expr.label("original_file_size"),
-            total_chunks_expr.label("total_chunks"),
-            source_type_expr.label("source_type"),
-            func.min(models.Message.created_at).label("created_at"),
-            func.max(models.Message.created_at).label("updated_at"),
-            func.count(models.Message.id).label("chunk_count"),
-            func.min(models.Message.session_name).label("session_id"),
-            func.min(models.Message.peer_name).label("peer_id"),
-        )
-        .where(
-            models.Message.workspace_name == workspace_id,
-            file_id_expr.isnot(None),
-        )
-        .group_by(
-            file_id_expr,
-            filename_expr,
-            content_type_expr,
-            original_size_expr,
-            total_chunks_expr,
-            source_type_expr,
-        )
-        .order_by(func.max(models.Message.created_at).desc())
-        .limit(limit)
+    file_total = int(
+        (
+            await db.execute(
+                select(func.count(func.distinct(file_id_expr))).where(
+                    models.Message.workspace_name == workspace_id,
+                    file_id_expr.isnot(None),
+                )
+            )
+        ).scalar_one()
+        or 0
     )
-    rows = (await db.execute(stmt)).all()
-    documents = [
-        {
-            "id": row.file_id,
-            "filename": row.filename,
-            "content_type": row.content_type,
-            "original_file_size": int(row.original_file_size or 0),
-            "total_chunks": int(row.total_chunks or row.chunk_count or 0),
-            "chunk_count": int(row.chunk_count or 0),
-            "session_id": row.session_id,
-            "peer_id": row.peer_id,
-            "source_type": row.source_type or "file_upload",
-            "created_at": _iso(row.created_at),
-            "updated_at": _iso(row.updated_at),
-        }
-        for row in rows
+    documents: list[dict[str, Any]] = []
+
+    if offset < file_total:
+        file_limit = min(limit, file_total - offset)
+        stmt = (
+            select(
+                file_id_expr.label("file_id"),
+                filename_expr.label("filename"),
+                content_type_expr.label("content_type"),
+                original_size_expr.label("original_file_size"),
+                total_chunks_expr.label("total_chunks"),
+                source_type_expr.label("source_type"),
+                func.min(models.Message.created_at).label("created_at"),
+                func.max(models.Message.created_at).label("updated_at"),
+                func.count(models.Message.id).label("chunk_count"),
+                func.min(models.Message.session_name).label("session_id"),
+                func.min(models.Message.peer_name).label("peer_id"),
+            )
+            .where(
+                models.Message.workspace_name == workspace_id,
+                file_id_expr.isnot(None),
+            )
+            .group_by(
+                file_id_expr,
+                filename_expr,
+                content_type_expr,
+                original_size_expr,
+                total_chunks_expr,
+                source_type_expr,
+            )
+            .order_by(func.max(models.Message.created_at).desc())
+            .offset(offset)
+            .limit(file_limit)
+        )
+        rows = (await db.execute(stmt)).all()
+        documents.extend(
+            [
+                {
+                    "id": row.file_id,
+                    "filename": row.filename,
+                    "content_type": row.content_type,
+                    "original_file_size": int(row.original_file_size or 0),
+                    "total_chunks": int(row.total_chunks or row.chunk_count or 0),
+                    "chunk_count": int(row.chunk_count or 0),
+                    "session_id": row.session_id,
+                    "peer_id": row.peer_id,
+                    "source_type": row.source_type or "file_upload",
+                    "created_at": _iso(row.created_at),
+                    "updated_at": _iso(row.updated_at),
+                }
+                for row in rows
+            ]
+        )
+
+    imported_conditions = [
+        models.Message.workspace_name == workspace_id,
+        file_id_expr.is_(None),
+        (
+            models.Message.session_name.ilike("diary-%")
+            | models.Message.session_name.ilike("document-%")
+            | models.Message.session_name.ilike("import-%")
+            | models.Message.content.startswith("---\n")
+        ),
     ]
+    imported_total = int(
+        (
+            await db.execute(
+                select(func.count(models.Message.id)).where(*imported_conditions)
+            )
+        ).scalar_one()
+        or 0
+    )
 
     remaining = max(0, limit - len(documents))
     if remaining:
+        imported_offset = max(0, offset - file_total)
         imported_stmt = (
             select(models.Message)
-            .where(
-                models.Message.workspace_name == workspace_id,
-                file_id_expr.is_(None),
-                (
-                    models.Message.session_name.ilike("diary-%")
-                    | models.Message.session_name.ilike("document-%")
-                    | models.Message.session_name.ilike("import-%")
-                    | models.Message.content.startswith("---\n")
-                ),
-            )
+            .where(*imported_conditions)
             .order_by(models.Message.created_at.desc(), models.Message.id.desc())
+            .offset(imported_offset)
             .limit(remaining)
         )
         imported_messages = (await db.execute(imported_stmt)).scalars().all()
@@ -758,7 +789,18 @@ async def list_workspace_documents(
                     "updated_at": _iso(message.created_at),
                 }
             )
-    return {"workspace_id": workspace_id, "documents": documents}
+    total = file_total + imported_total
+    return {
+        "workspace_id": workspace_id,
+        "documents": documents,
+        "pagination": {
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+            "has_next": offset + limit < total,
+            "has_previous": offset > 0,
+        },
+    }
 
 
 @router.post(

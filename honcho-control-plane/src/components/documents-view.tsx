@@ -10,9 +10,17 @@ function formatDate(value: string | null) {
 }
 
 const MAX_IMPORT_CHARS = 25000;
+const PAGE_SIZE = 100;
 
 export function DocumentsView({ workspaceId }: { workspaceId: string }) {
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
+  const [pagination, setPagination] = useState({
+    limit: PAGE_SIZE,
+    offset: 0,
+    total: 0,
+    has_next: false,
+    has_previous: false
+  });
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,19 +36,29 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
   const [enqueueProcessing, setEnqueueProcessing] = useState(true);
   const [metadata, setMetadata] = useState("{}");
   const [peerOptions, setPeerOptions] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("1");
 
   function loadDocuments() {
     setLoading(true);
     setError(null);
     api
-      .getDocuments(workspaceId)
-      .then((response) => setDocuments(response.documents))
+      .getDocuments(workspaceId, { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+      .then((response) => {
+        setDocuments(response.documents);
+        setPagination(response.pagination);
+      })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
   }
 
   useEffect(() => {
     loadDocuments();
+  }, [workspaceId, page]);
+
+  useEffect(() => {
+    setPage(1);
+    setPageInput("1");
   }, [workspaceId]);
 
   useEffect(() => {
@@ -120,6 +138,19 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
     importMode === "file"
       ? Boolean(file && peerId && !uploading)
       : Boolean(textContent.trim() && peerId && !uploading);
+  const totalPages = Math.max(1, Math.ceil(pagination.total / pagination.limit));
+  const pageStart = pagination.total > 0 ? pagination.offset + 1 : 0;
+  const pageEnd = Math.min(pagination.offset + documents.length, pagination.total);
+
+  useEffect(() => {
+    setPageInput(String(page));
+  }, [page]);
+
+  function jumpToPage() {
+    const parsed = Number.parseInt(pageInput, 10);
+    if (!Number.isFinite(parsed)) return;
+    setPage(Math.min(Math.max(parsed, 1), totalPages));
+  }
 
   return (
     <div>
@@ -235,7 +266,48 @@ export function DocumentsView({ workspaceId }: { workspaceId: string }) {
       </div>
 
       <div className="card">
+        <div className="card-header">
+          <h2 className="card-title">Imported Documents</h2>
+          <p className="card-subtitle">
+            Showing {pageStart.toLocaleString()}-{pageEnd.toLocaleString()} of{" "}
+            {pagination.total.toLocaleString()} documents.
+          </p>
+        </div>
         <div className="card-body">
+          <div className="toolbar">
+            <button
+              className="button"
+              disabled={!pagination.has_previous || loading}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+            >
+              Previous
+            </button>
+            <span className="pill">
+              Page {page} / {totalPages}
+            </span>
+            <input
+              className="input page-input"
+              min={1}
+              max={totalPages}
+              type="number"
+              value={pageInput}
+              onChange={(event) => setPageInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") jumpToPage();
+              }}
+              aria-label="Document page number"
+            />
+            <button className="button" disabled={loading} onClick={jumpToPage}>
+              Go
+            </button>
+            <button
+              className="button"
+              disabled={!pagination.has_next || loading}
+              onClick={() => setPage((value) => value + 1)}
+            >
+              Next
+            </button>
+          </div>
           {loading ? (
             <div className="empty">Loading documents...</div>
           ) : documents.length === 0 ? (
