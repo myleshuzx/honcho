@@ -100,6 +100,13 @@ export type MemoriesResponse = {
     has_next: boolean;
     has_previous: boolean;
   };
+  sessions_pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+    has_next: boolean;
+    has_previous: boolean;
+  };
   observation_counts: Record<ObservationLevel, number>;
   observations: Record<ObservationLevel, Observation[]>;
   source_documents: Record<string, Observation>;

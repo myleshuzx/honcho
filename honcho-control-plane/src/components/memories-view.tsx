@@ -10,16 +10,15 @@ import type {
   PeerPair,
   RepresentationResponse,
   SessionInfo,
-  SessionSummaries,
   SourceMessage
 } from "@/lib/types";
-import { JsonPanel } from "./json-panel";
 
-type Tab = "sessions" | "representation" | "observations" | "summary" | "peer-card";
+type Tab = "sessions" | "representation" | "observations" | "peer-card";
 type ObservationTab = ObservationLevel;
 
 const levels: ObservationTab[] = ["explicit", "deductive", "inductive", "contradiction"];
 const PAGE_SIZE = 500;
+const SESSION_PAGE_SIZE = 100;
 
 function formatDate(value?: string | null) {
   return value ? new Date(value).toLocaleString() : "Unknown";
@@ -338,26 +337,6 @@ function Timeline({ observations }: { observations: Observation[] }) {
   );
 }
 
-function SummaryCard({ title, value }: { title: string; value: Record<string, unknown> | null }) {
-  const content = typeof value?.content === "string" ? value.content : null;
-  const createdAt = typeof value?.created_at === "string" ? value.created_at : null;
-  return (
-    <div className="card">
-      <div className="card-header">
-        <h2 className="card-title">{title}</h2>
-        {createdAt && <p className="card-subtitle">Created {formatDate(createdAt)}</p>}
-      </div>
-      <div className="card-body">
-        {content ? (
-          <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.65 }}>{content}</div>
-        ) : (
-          <div className="muted">No {title.toLowerCase()} available.</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function PeerPairSelector({
   pairs,
   selected,
@@ -390,8 +369,9 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
+  const [sessionPage, setSessionPage] = useState(1);
+  const [sessionPageInput, setSessionPageInput] = useState("1");
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
-  const [sessionSummaries, setSessionSummaries] = useState<SessionSummaries | null>(null);
   const [selectedPair, setSelectedPair] = useState<PeerPair | null>(null);
   const [representation, setRepresentation] = useState<RepresentationResponse | null>(null);
   const [peerCard, setPeerCard] = useState<PeerCardResponse | null>(null);
@@ -401,11 +381,16 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
     setLoading(true);
     setError(null);
     api
-      .getMemories(workspaceId, { limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+      .getMemories(workspaceId, {
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+        sessions_limit: SESSION_PAGE_SIZE,
+        sessions_offset: (sessionPage - 1) * SESSION_PAGE_SIZE
+      })
       .then(setData)
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
-  }, [workspaceId, page]);
+  }, [workspaceId, page, sessionPage]);
 
   useEffect(() => {
     setSelectedDerivation(null);
@@ -417,10 +402,21 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
   const pageEnd = data
     ? Math.min(data.pagination.offset + data.pagination.limit, data.pagination.total)
     : 0;
+  const sessionTotalPages = data
+    ? Math.max(1, Math.ceil(data.sessions_pagination.total / data.sessions_pagination.limit))
+    : 1;
+  const sessionPageStart = data && data.sessions_pagination.total > 0 ? data.sessions_pagination.offset + 1 : 0;
+  const sessionPageEnd = data
+    ? Math.min(data.sessions_pagination.offset + data.sessions.length, data.sessions_pagination.total)
+    : 0;
 
   useEffect(() => {
     setPageInput(String(page));
   }, [page]);
+
+  useEffect(() => {
+    setSessionPageInput(String(sessionPage));
+  }, [sessionPage]);
 
   function jumpToPage() {
     const parsed = Number.parseInt(pageInput, 10);
@@ -428,22 +424,22 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
     setPage(Math.min(Math.max(parsed, 1), totalPages));
   }
 
+  function jumpToSessionPage() {
+    const parsed = Number.parseInt(sessionPageInput, 10);
+    if (!Number.isFinite(parsed)) return;
+    setSessionPage(Math.min(Math.max(parsed, 1), sessionTotalPages));
+  }
+
+  useEffect(() => {
+    setSessionPage(1);
+    setSessionPageInput("1");
+  }, [workspaceId]);
+
   useEffect(() => {
     if (!data) return;
     setSelectedSession((current) => current ?? data.sessions[0] ?? null);
     setSelectedPair((current) => current ?? data.peer_pairs[0] ?? null);
   }, [data]);
-
-  useEffect(() => {
-    if (!selectedSession) {
-      setSessionSummaries(null);
-      return;
-    }
-    api
-      .getSessionSummaries(workspaceId, selectedSession.id)
-      .then(setSessionSummaries)
-      .catch(() => setSessionSummaries(null));
-  }, [workspaceId, selectedSession]);
 
   useEffect(() => {
     if (!selectedPair) {
@@ -466,12 +462,12 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
       <div className="page-title">
         <div>
           <h1>Memories</h1>
-          <p>Explore sessions, representations, observations, summaries, and peer cards.</p>
+          <p>Explore sessions, representations, observations, and peer cards.</p>
         </div>
       </div>
 
       <div className="tabs">
-        {(["sessions", "representation", "observations", "summary", "peer-card"] as Tab[]).map((item) => (
+        {(["sessions", "representation", "observations", "peer-card"] as Tab[]).map((item) => (
           <button key={item} className={`tab ${tab === item ? "active" : ""}`} onClick={() => setTab(item)}>
             {item.replace("-", " ")}
           </button>
@@ -481,7 +477,45 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
       {loading && <div className="empty card">Loading memories...</div>}
       {error && <div className="empty card">{error}</div>}
       {data && tab === "sessions" && (
-        <div className="grid cols-2">
+        <div>
+          <div className="toolbar">
+            <span className="muted">
+              Showing {sessionPageStart.toLocaleString()}-{sessionPageEnd.toLocaleString()} of{" "}
+              {data.sessions_pagination.total.toLocaleString()} sessions
+            </span>
+            <button
+              className="button"
+              disabled={!data.sessions_pagination.has_previous || loading}
+              onClick={() => setSessionPage((value) => Math.max(1, value - 1))}
+            >
+              Previous
+            </button>
+            <span className="pill">
+              Page {sessionPage} / {sessionTotalPages}
+            </span>
+            <input
+              className="input page-input"
+              min={1}
+              max={sessionTotalPages}
+              type="number"
+              value={sessionPageInput}
+              onChange={(event) => setSessionPageInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") jumpToSessionPage();
+              }}
+              aria-label="Session page number"
+            />
+            <button className="button" disabled={loading} onClick={jumpToSessionPage}>
+              Go
+            </button>
+            <button
+              className="button"
+              disabled={!data.sessions_pagination.has_next || loading}
+              onClick={() => setSessionPage((value) => value + 1)}
+            >
+              Next
+            </button>
+          </div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -505,10 +539,6 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
                 ))}
               </tbody>
             </table>
-          </div>
-          <div className="grid">
-            <SummaryCard title="Short Summary" value={sessionSummaries?.short_summary ?? null} />
-            <SummaryCard title="Long Summary" value={sessionSummaries?.long_summary ?? null} />
           </div>
         </div>
       )}
@@ -603,39 +633,6 @@ export function MemoriesView({ workspaceId }: { workspaceId: string }) {
             <div className="card-body" style={{ whiteSpace: "pre-wrap", lineHeight: 1.65 }}>
               {representation?.representation || "No representation available."}
             </div>
-          </div>
-        </div>
-      )}
-
-      {data && tab === "summary" && (
-        <div className="grid cols-2">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Session</th>
-                  <th>Status</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.sessions.map((session) => (
-                  <tr
-                    key={session.id}
-                    onClick={() => setSelectedSession(session)}
-                    style={{ cursor: "pointer", background: selectedSession?.id === session.id ? "var(--primary-soft)" : undefined }}
-                  >
-                    <td>{session.name}</td>
-                    <td><span className="pill">{session.is_active ? "active" : "inactive"}</span></td>
-                    <td>{formatDate(session.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="grid">
-            <SummaryCard title="Short Summary" value={sessionSummaries?.short_summary ?? null} />
-            <SummaryCard title="Long Summary" value={sessionSummaries?.long_summary ?? null} />
           </div>
         </div>
       )}

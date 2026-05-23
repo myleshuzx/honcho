@@ -285,13 +285,27 @@ async def get_workspace_memories(
     session_id: str | None = Query(None),
     limit: int = Query(default=500, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    sessions_limit: int = Query(default=100, ge=1, le=500),
+    sessions_offset: int = Query(default=0, ge=0),
     db: AsyncSession = db,
 ) -> dict[str, Any]:
     """Return sessions, peer pairs, and observations for memory exploration."""
+    session_total = int(
+        (
+            await db.execute(
+                select(func.count(models.Session.id)).where(
+                    models.Session.workspace_name == workspace_id
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
     sessions_result = await db.execute(
         select(models.Session)
         .where(models.Session.workspace_name == workspace_id)
         .order_by(models.Session.created_at.desc())
+        .offset(sessions_offset)
+        .limit(sessions_limit)
     )
     sessions = [
         {
@@ -455,6 +469,13 @@ async def get_workspace_memories(
             "total": total_observations,
             "has_next": offset + limit < total_observations,
             "has_previous": offset > 0,
+        },
+        "sessions_pagination": {
+            "limit": sessions_limit,
+            "offset": sessions_offset,
+            "total": session_total,
+            "has_next": sessions_offset + sessions_limit < session_total,
+            "has_previous": sessions_offset > 0,
         },
         "observation_counts": level_counts,
         "observations": grouped,
